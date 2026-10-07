@@ -11,10 +11,10 @@
  * feedLabel 是分类 RSS 标题里的名字（不写就用 label）。公开接口、RSS 和 MCP 里要把一类并进另一类发布，写在站点设置里（site/site.ts 的 PUBLIC_CATEGORIES）。
  */
 export const CATEGORIES = [
-  { key: "ai-models", label: "模型", feedLabel: "AI 模型", section: "模型发布/更新", guide: "模型本身的发布、版本、权重开放、能力或价格变化，以及既有榜单上的模型成绩。公布一次跑分不是发布新基准，也不是教程。" },
-  { key: "ai-products", label: "产品", feedLabel: "AI 产品", section: "产品发布/更新", guide: "可使用的 AI 产品、功能、应用、工具、API、平台和工程组件的发布更新。模型厂商发布的推理框架、算子库、硬件适配组件仍是产品，不能因为厂商名归成模型。" },
+  { key: "ai-models", label: "Agent 模型", feedLabel: "Agent 模型", section: "Agent 模型", guide: "直接影响 Agent 的工具调用、长程任务、视觉操作、成本或可用性的模型发布与评测。泛模型新闻不在本站范围；新基准归研究。" },
+  { key: "ai-products", label: "产品与 Harness", feedLabel: "Agent 产品与 Harness", section: "产品与 Harness", guide: "Coding Agent、浏览器或桌面 Agent 的发布，以及运行循环、上下文、工具执行、沙盒、权限和协作基础设施的更新。工具发布归此类，使用方法归实践。" },
   { key: "industry", label: "行业", feedLabel: "行业动态", section: "行业动态", guide: "已发生的公司经营、融资并购、人事、合作、诉讼、政策、真实安全事故及调查进展。新闻由当事人发帖、带有态度，也不因此变成观点。" },
-  { key: "paper", label: "论文", feedLabel: "论文", section: "论文研究", guide: "以新研究方法、实验设计与发现为核心的论文、技术报告、新基准或研究数据集。系统性红队实验属于研究；既有榜单成绩归模型，真实事故的新闻调查归行业。" },
+  { key: "paper", label: "研究与评测", feedLabel: "Agent 研究", section: "研究与评测", guide: "Agent Harness、CUA、Agentic RL、Harness 演进、Agent 安全相关论文、技术报告、基准和数据集。作者报告的结果与独立复现分开，不把推理时搜索称作强化学习。" },
   { key: "tip", label: "教程", section: "技巧与观点", guide: "读者可以照着使用的方法、提示词、工具用法、工程实践复盘与技术讲解。重点是可复用的做法；单纯发布工具归产品，只有态度和预测而无做法归观点。", commentary: true },
   { key: "opinion", label: "观点", section: "技巧与观点", guide: "重点是作者的解释、判断、主张、预测、评论或访谈观点。讨论市场不自动归行业，作者是名人不自动归观点。", commentary: true },
 ] as const satisfies ReadonlyArray<{ key: string; label: string; feedLabel?: string; section: string; guide: string; commentary?: true }>;
@@ -27,7 +27,7 @@ export const CATEGORIES = [
 export const RELEASE: { category: string; tag: string; unit: string } | null = { category: "ai-models", tag: "模型发布", unit: "个新模型" };
 
 /** 周报月报的总述可以直接写、不必在报道里找到出处的行业通用词（小写）。站名会自动算进去。 */
-export const PLAIN_TERMS: readonly string[] = ["ai", "api", "llm", "gpu", "agi", "ceo", "ipo"];
+export const PLAIN_TERMS: readonly string[] = ["ai", "api", "llm", "agent", "harness", "cua", "mcp", "rl", "rsi"];
 
 /**
  * 内容理解一步给每篇资料判的“内容类型”（写在 prompts/content-understanding.md 里，改了类型要同步改那份提示词）。
@@ -46,6 +46,7 @@ export const CATEGORY_TAGS = [
 /** 可选的主题标签。 */
 export const TOPIC_TAGS = [
   "Agent", "编码", "推理", "多模态", "语音", "视频", "图像生成", "RAG", "端侧", "数据/训练", "搜索", "部署/工程", "开源生态", "具身智能", "MCP/工具调用",
+  "Harness", "CUA", "Agentic RL", "上下文工程", "多Agent协作", "沙盒/权限", "Agent安全", "RSI",
 ] as const;
 
 /** 可选的实体标签（公司、机构、平台）。 */
