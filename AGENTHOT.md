@@ -47,6 +47,29 @@ and sessions, and feedback records. Production uses fresh independent secrets.
 Public deployment acceptance must verify the actual domain and release rather
 than relying on a successful image build.
 
+### First Release Acceptance (2026-10-07)
+
+- Runtime release: `b23f4791c2f1216d04caf9997c2dfa39d71ffd25` on the independent
+  `agenthot` Docker project. DB, API and web are healthy; no worker is running.
+- DNS resolves the requested hostname to the deployment. Let's Encrypt HTTPS
+  and HTTP-to-HTTPS `308` were verified without bypassing certificate checks.
+- The original 30-route smoke check passed against the real HTTPS domain.
+  Production admin sign-in, secure cookie attributes, anonymous `401` responses
+  and session revocation after logout passed.
+- The reader pool contains four articles, three selected. Imported selected
+  sync payloads initially retained localhost links; the upstream `publishArticle`
+  function refreshed them without model calls or scoring/content changes.
+- Desktop 1440x1000 and mobile 390x844 list/detail checks passed with no horizontal
+  overflow or page errors. Full-text-disabled items expose no body in public
+  projections. A relevance-blocked item remains accessible as unlisted metadata
+  by exact ID, following upstream behavior; this is not a private-content gate.
+- This release passed typecheck, 167 standalone tests, 42 web tests and a
+  production Docker build. The previous 659 non-backup integration result is
+  historical; that full suite was not rerun for this deployment-only change.
+- No recurring backup job is enabled. The first content-transfer dump is retained
+  in private operator storage; use the runbook for subsequent matched DB/files
+  backups before updating. Production credentials are ignored, mode `0600` files.
+
 ## Upstream Maintenance
 
 `origin` is `dairui1/agenthot`; `upstream` is `KKKKhazix/AIHOT`. Fetch and review upstream changes, merge in a branch, then rerun typecheck, database tests, web tests and smoke checks. Do not mass-rename `@aihot/*` or modify historic migrations for branding.

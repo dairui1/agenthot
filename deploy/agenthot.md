@@ -71,6 +71,30 @@ Never import local `.env`, administrator sessions, or Codex authentication files
 Fresh production authentication secrets invalidate any old sessions, but session
 records should still be excluded from an initial preview-to-production transfer.
 
+After importing content from a different `SITE_URL`, refresh the existing
+publication projections before public acceptance. The selected sync ledger stores
+absolute links; changing the environment alone does not update those saved
+payloads. Use the upstream publication function, not new model analysis or direct
+edits to historical ledger rows:
+
+```sh
+dc run --rm -T --no-deps api node --input-type=module -e '
+import { sql, closeDb } from "@aihot/backend/db";
+import { publishArticle } from "@aihot/backend/publication/publish";
+try {
+  const rows = await sql`SELECT article_id FROM publications ORDER BY article_id`;
+  for (const { article_id } of rows) await publishArticle(article_id);
+} finally {
+  await closeDb();
+}'
+```
+
+Verify `links.aihot` and `attribution.url` in
+`/api/v1/selected/snapshot?limit=100`, as well as ordinary page and feed URLs.
+The refresh appends corrected sync entries and preserves prior ledger history.
+Clients with an earlier cursor receive the correction through changes. Check
+that model receipt counts, selection decisions and article dates are unchanged.
+
 Do not enable either `--profile processing` or `--profile https`. Even with the
 processing profile selected, this overlay deliberately keeps model and collector
 valves closed. Runtime memory limits do not constrain the image build: allow
@@ -99,6 +123,12 @@ Traefik and any CDN must honor the application's `Cache-Control`: do not cache
 admin/auth endpoints, extend public response lifetimes, or serve expired content
 offline. MCP must remain unbuffered and uncached. A public reading check must not
 increase editorial model receipts.
+
+An excluded relevance result is not a withdrawal in the upstream engine: it is
+absent from lists, feeds and the sitemap, but an exact item URL may still expose
+its original title, source and link. A random unknown ID must return `404`.
+Do not claim unlisted content is inaccessible. Full-text restrictions apply to
+all detail, Markdown and RSS projections independently.
 
 ## Backup and update
 
