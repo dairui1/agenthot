@@ -6,7 +6,7 @@ AgentHot is an independent fork of [AIHOT](https://github.com/KKKKhazix/AIHOT), 
 
 - Baseline: `8e34e05feb161cb5838e592ee22715f791c7f814`.
 - Keep collection, editorial scoring, grouping, publication, reports, admin and reader pages upstream-owned.
-- Customize `site/` and `industry/`; put future AgentLab integration in `modules/`.
+- Customize `site/` and `industry/`; AgentLab integration lives in `modules/agentlab/`.
 - Preserve the upstream license and notices. Do not use AIHOT's name or logo as this site's brand.
 - Keep upstream package names and environment variable names to reduce merge conflicts.
 
@@ -15,6 +15,28 @@ AgentHot is an independent fork of [AIHOT](https://github.com/KKKKhazix/AIHOT), 
 The initial scope is Coding Agents, Agent Harnesses, browser/desktop agents (CUA), Agentic RL, context, tools, collaboration and security. General model/business news needs concrete Agent relevance. This is a reviewable starting configuration, not a user-calibrated editorial policy.
 
 The initial source list uses eight upstream public RSS examples. On 2026-10-07 all eight returned HTTP 200 with RSS/Atom root elements; this verifies reachability, not editorial quality or complete ingestion. Anthropic and smaller Agent projects are not comprehensively covered; paid X/WeChat collectors are not enabled.
+
+## AgentLab source
+
+The dedicated `agentlab-sync` process pulls AgentLab's published
+`/data/syndication.json` every 30 minutes. It imports all qualifying version
+analyses through the upstream material and publication functions, not through a
+second feed UI. Both repositories remain independent. See
+[`modules/agentlab/README.md`](modules/agentlab/README.md) for the contract,
+operating commands and failure behavior.
+
+AgentLab's title, summary and source links are reused with explicit attribution.
+These items enter the public pool only with complete/reviewed analysis, fresh
+evidence and a reliable publication date. Imported importance does not become an
+AgentHot score or automatic selection. This import calls no model, preserves
+stable identities across corrections and intentional reverts, and propagates
+explicit suppression/withdrawal without overwriting administrator decisions.
+Omission alone never removes an article. Research articles are not imported until
+they have a reliable first-publication date.
+
+The general worker, RSS collectors, model calls and notification valves remain
+off in production; only this bounded AgentLab synchronization runs. The separate
+Compose service has no public port and carries no Codex/ChatGPT credentials.
 
 Scoring types, five-axis weights and thresholds remain upstream defaults. Run SelectBench with 100-200 user-labelled samples before claiming selection quality. Source code, project-reported results and independent reproduction must not be conflated.
 

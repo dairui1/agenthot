@@ -1,0 +1,7 @@
+{
+  "name": "@aihot/agentlab",
+  "private": true,
+  "type": "module",
+  "exports": { "./server": "./server.ts" },
+  "dependencies": { "@aihot/backend": "*", "@aihot/contracts": "*", "zod": "4.6.5" }
+}

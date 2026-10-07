@@ -13,9 +13,13 @@ the collection, publication and authentication engine remains unchanged.
   profile on a host where Traefik already owns ports 80 and 443.
 - Only `web` joins the shared proxy network. Its sole host binding is
   `127.0.0.1:4310`; PostgreSQL and the API stay on the private Compose network.
-- This release is a reader, not an automatic news pipeline. The worker is in the
+- The general news worker is in the
   opt-in `processing` profile. All backend collection, model and notification
   valves are forced off by the overlay, even if `.env` says otherwise.
+- The separate `agentlab-sync` service imports the owner's published AgentLab
+  syndication feed every 30 minutes. It reuses validated analysis, calls no model,
+  and does not enable the RSS collectors or general worker. Source metadata and
+  pause/resume remain in the existing admin sources page.
 - No Codex executable, ChatGPT login, OAuth file or local adapter token is deployed.
   Opening public pages never invokes a model. A supported processing deployment,
   budget setup and explicit review of these valves are separate work.
@@ -59,9 +63,9 @@ dc config --quiet
 dc build
 dc up -d db
 dc run --rm setup
-dc up -d api web
+dc up -d api web agentlab-sync
 dc ps -a
-dc logs --tail 100 api web
+dc logs --tail 100 api web agentlab-sync
 ```
 
 `setup` only applies migrations and source seeds; it does not import the local
@@ -102,6 +106,29 @@ enough separate headroom for `npm ci` and the production frontend build.
 
 ## Acceptance
 
+AgentLab items enter `/all`, not the scored selection automatically. Imported
+importance is not an AgentHot score. The item page and its Markdown export name
+AgentLab separately from the underlying release, code and capture evidence.
+Only completed/reviewed analysis with fresh sources and a verified publication
+date is public. Missing publication dates, stale evidence, explicit suppression
+and withdrawal remain private; absence from a snapshot is not a withdrawal.
+
+Before starting continuous synchronization, run the importer twice and confirm
+the second run creates no material revisions or new analyses:
+
+```sh
+dc run --rm --no-deps agentlab-sync node modules/agentlab/cli.ts --once
+dc run --rm --no-deps agentlab-sync node modules/agentlab/cli.ts --once
+dc exec -T agentlab-sync node modules/agentlab/cli.ts --health
+```
+
+Require zero additional model receipts, stable item IDs and dates, working
+version-specific AgentLab links, and evidence links on desktop/mobile details
+and Markdown. Schema or network errors must keep the last good snapshot and
+record the source error. The dedicated health check must fail after the source
+has not synchronized successfully within its allowed interval. Pause the
+AgentLab source in admin to stop imports without withdrawing existing articles.
+
 ```sh
 node scripts/smoke.ts --base https://agenthot.dairui1.com
 curl -fsS https://agenthot.dairui1.com/api/health
@@ -141,7 +168,7 @@ shell that stops on failure; do not continue after an unsuccessful backup.
 set -e
 umask 077
 dc build
-dc stop api worker web
+dc stop api worker web agentlab-sync
 BACKUP="$HOME/agenthot-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP"
 git rev-parse HEAD > "$BACKUP/source-revision.txt"
@@ -150,7 +177,7 @@ dc run --rm -T --no-deps --entrypoint tar api -C /data --exclude=./backups -czf 
 dc exec -T db pg_restore --list < "$BACKUP/database.dump" > "$BACKUP/database.contents.txt"
 tar -tzf "$BACKUP/data.tar.gz" > "$BACKUP/data.contents.txt"
 dc run --rm setup
-dc up -d api web
+dc up -d api web agentlab-sync
 ```
 
 Record both the previously running release SHA and the proposed new SHA with the

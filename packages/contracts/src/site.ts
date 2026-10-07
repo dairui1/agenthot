@@ -124,11 +124,25 @@ export interface OutlineEntry {
   level: number;
 }
 
+/** Source-supplied analysis, kept distinct from this site's editorial scores. */
+export interface ItemProvenance {
+  name: string;
+  url: string;
+  analysisStatus: "complete" | "reviewed";
+  agentId: string;
+  version: string;
+  dateKind: "published" | "captured";
+  revision: string;
+  sourceFreshness: string;
+  sources: Array<{ label: string; url: string; kind?: string }>;
+}
+
 /**
  * An article page (/api/site/items/:id) in one language: Chinese (the article itself or its translation)
  * unless …/original asks for the original. Only the body shown is sent, with its outline.
  */
 export interface SiteItemDetail extends ItemSummary {
+  provenance?: ItemProvenance | null;
   /** The post with all its media; its text is the body. */
   x: Omit<XPostView, "text" | "translation"> | null;
   /** Selected, but its fact's seat is held by this report: marked 同新闻, without a reason of its own. */

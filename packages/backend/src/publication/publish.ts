@@ -11,7 +11,7 @@ import { originalPostCopy } from "../content/posts.ts";
 import { itemUrl } from "./links.ts";
 import { pickRepresentative, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "./representative.ts";
 import { enqueue, QUEUES, shutdownSignal } from "../jobs/queue.ts";
-import { emit } from "../modules.ts";
+import { emit, serverModules } from "../modules.ts";
 import {
   bodyModeOf, channelOf, displayTags, isIndexable, isPoolEligible, isSelectable, mayRedistribute, publicSourceName, type SourceFacts,
 } from "./rules.ts";
@@ -278,7 +278,11 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   const relevance = typeof f.relevance === "string" ? (f.relevance as string) : analysis?.relevance ?? null;
   const judgedSelected = typeof f.selected === "boolean" ? (f.selected as boolean) : analysis?.selected ?? null;
   // Material from an isolated source reaches no public surface at all: not even a detail page.
-  const visibility = source.participation_mode === "isolated" ? "withdrawn" : (override?.visibility ?? "public");
+  let restricted = false;
+  for (const module of serverModules()) {
+    if (await module.publicationRestriction?.(articleId, tx) === "withdrawn") restricted = true;
+  }
+  const visibility = source.participation_mode === "isolated" || restricted ? "withdrawn" : (override?.visibility ?? "public");
 
   // An undated archive has a readable detail page, but its discovery is not a news timestamp.
   // Explicit imports can retain an editorial decision already published elsewhere.

@@ -1,5 +1,5 @@
 // Item detail and Markdown export, both behind the same visibility and licence rules.
-import type { OutlineEntry, SiteItemDetail, StoryRef } from "@aihot/contracts/site";
+import type { ItemProvenance, OutlineEntry, SiteItemDetail, StoryRef } from "@aihot/contracts/site";
 import { ITEM_COPY, SITE } from "@aihot/site";
 import { bodyToMarkdown } from "../content/markdown.ts";
 import { sql } from "../db.ts";
@@ -11,6 +11,23 @@ import { evidenceCondition, listedCondition } from "./scope.ts";
 import { itemUrl, siteUrl } from "./links.ts";
 import { hasItemPage, publicSourceName } from "./rules.ts";
 import { topicLinks, topicMembership } from "./topics.ts";
+import { serverModules } from "../modules.ts";
+
+async function sourceProvenance(id: string): Promise<ItemProvenance | null> {
+  for (const module of serverModules()) {
+    const provenance = await module.itemProvenance?.(id, sql);
+    if (provenance) return provenance;
+  }
+  return null;
+}
+
+function markdownLabel(value: string): string {
+  return value.replace(/[\\\[\]`<>]/g, " ").replace(/[\r\n]+/g, " ").trim();
+}
+
+function markdownUrl(value: string): string {
+  return new URL(value).href.replace(/[<>]/g, (char) => encodeURIComponent(char));
+}
 
 interface DetailRow extends ItemRow {
   body_html: string | null;
@@ -151,6 +168,7 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
   const item: SiteItemDetail = {
     ...summary,
     x,
+    provenance: await sourceProvenance(id),
     ...(sameEvent ? { reason: null, sameEvent } : {}),
     readingMode: "full",
     author: row.author,
@@ -190,6 +208,15 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   lines.push(`- ${SITE.name}：${itemUrl(row.id)}`);
   lines.push(`- 原文：${row.url}`, "");
   if (row.summary) lines.push("## 摘要", "", row.summary, "");
+  const provenance = await sourceProvenance(id);
+  if (provenance) {
+    lines.push("## 分析与证据", "", `- 分析来源：[${markdownLabel(provenance.name)}](<${markdownUrl(provenance.url)}>)`,
+      `- 版本：${markdownLabel(provenance.agentId)} ${markdownLabel(provenance.version)}`,
+      `- 分析状态：${provenance.analysisStatus === "reviewed" ? "已复核" : "已完成"}`,
+      `- 时间依据：${provenance.dateKind === "captured" ? "采集时间，非官方发布日期" : "来源发布日期"}`, "");
+    for (const source of provenance.sources) lines.push(`- [${markdownLabel(source.label)}](<${markdownUrl(source.url)}>)`);
+    lines.push("");
+  }
   if (row.selected && row.seat && row.reason) lines.push(`## ${ITEM_COPY.reasonLabel}`, "", row.reason, "");
   if (showsPost(row) && row.x_post) {
     const post = xView(row);

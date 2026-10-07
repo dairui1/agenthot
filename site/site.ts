@@ -35,7 +35,7 @@ export const SITE = {
   /** 反馈表单邮箱框里的提示。 */
   feedbackEmailHint: "留下邮箱，我们可以回信联系你",
   /** 一句话介绍：搜索引擎、分享卡片、RSS、llms.txt 会用。 */
-  description: "关注 Coding Agent、Harness、浏览器与桌面 Agent 的发布、研究和工程实践。当前为试运行，收录少量已处理内容，自动更新与定时报告尚未启用。",
+  description: "关注 Coding Agent、Harness、浏览器与桌面 Agent 的发布、研究和工程实践。AgentLab 版本分析持续同步，其他来源采集与定时报告尚未启用。",
   /** llms.txt 里一句话介绍下面的一段详细介绍（选填）。 */
   llmsIntro: null as string | null,
   /** 一行小字：分享图、海报下方。 */
@@ -136,13 +136,13 @@ export const ABOUT = {
   /** 大标题：第一行正常颜色，第二行强调色。 */
   headline: ["Agent 每天都有新动静，", "值得看的，只有几条。"] as [string, string],
   /** 标题下面的一段话。{sources} 会换成实时的信源数（两边自动加空格，所以 {sources} 两边不写空格）；统计没取到时换成 sourcesFallback。 */
-  lead: `${SITE.name} 当前配置了{sources}个候选信源。首版展示少量已处理的动态与精选，自动更新和定时报告暂未启用。免费，不用注册。`,
+  lead: `${SITE.name} 当前配置了{sources}个信源。AgentLab 版本分析每 30 分钟同步；其他来源保留已处理内容，定时报告暂未启用。免费，不用注册。`,
   sourcesFallback: "十几",
   /** 信源河动画下面的四个环节。 */
   steps: {
-    collect: "首版从公开 RSS 中试采样，尚未覆盖所有厂商与项目。",
+    collect: "AgentLab 提供有来源证据的版本分析，公开 RSS 保留前期采样，尚未覆盖所有厂商与项目。",
     store: "抓到的都存下来，同一件事的报道归到一起，热点榜就是从这里算出来的。",
-    select: `模型判断 Agent 相关性，再写中文标题、摘要和${ITEM_COPY.reasonLabel}；筛选标准还在校准，判断可能有误。`,
+    select: `AgentLab 摘要保留原分析，不自动进入精选；其他内容由模型判断相关性与${ITEM_COPY.reasonLabel}，判断可能有误。`,
     publish: "目前先开放已有摘要与原文链接，日报、周报和月报尚未开始定时发布。",
   },
   /**

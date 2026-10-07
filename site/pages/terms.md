@@ -7,7 +7,7 @@
 | 运营者 | dairui1，AgentHot 个人项目 |
 | 联系方式 | [站内反馈](/feedback)或 [GitHub Issues](https://github.com/dairui1/agenthot/issues) |
 
-AgentHot 聚合公开的 Agent 相关信息，提供中文摘要、阅读索引与原文链接。网页、RSS、公开 API 与 MCP 可匿名阅读。当前为试运行，收录量和来源覆盖有限，自动更新与定时报告尚未启用。
+AgentHot 聚合公开的 Agent 相关信息，提供中文摘要、阅读索引与原文链接。网页、RSS、公开 API 与 MCP 可匿名阅读。当前自动同步 AgentLab 的版本分析，其他来源的自动采集与定时报告尚未启用。来源覆盖仍然有限。
 
 ## 1. 内容与版权
 

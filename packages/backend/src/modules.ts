@@ -5,7 +5,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WorkOptions } from "pg-boss";
 import type { z } from "zod";
-import type { Brand } from "@aihot/contracts/site";
+import type { Brand, ItemProvenance } from "@aihot/contracts/site";
 import type { Db } from "./db.ts";
 import type { QueueOptions } from "./jobs/queue.ts";
 import type { Finding } from "./notify/feishu.ts";
@@ -197,6 +197,10 @@ export interface RequestNotices {
 export interface ServerModule {
   /** Its folder under modules/. */
   name: string;
+  /** Validated source evidence, read only after the publication detail visibility gate. */
+  itemProvenance?: (articleId: string, db: Db) => Promise<ItemProvenance | null>;
+  /** Source retractions restrict every projection without rewriting an editor's independent overrides. */
+  publicationRestriction?: (articleId: string, db: Db) => Promise<"withdrawn" | null>;
   /** Its HTTP routes, and hooks on the app such as what to flush when it closes, registered before the engine's v1 fallbacks (apps/api/src/app.ts). */
   http?: (app: FastifyInstance) => void;
   agent?: {
@@ -261,6 +265,8 @@ export interface ServerModule {
    * manual fetch, and what it returns is recorded in the audit trail.
    */
   sourceKinds?: Record<string, {
+    /** Limit a kind hook to the source identities this module owns. */
+    matches?: (sourceId: string) => boolean;
     resumed?: (sourceId: string, tx: Db) => Promise<void>;
     fetchNow?: (source: { id: string; config: Record<string, unknown> }) => Promise<Record<string, unknown>>;
   }>;

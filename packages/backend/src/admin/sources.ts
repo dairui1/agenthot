@@ -114,7 +114,7 @@ const EDITABLE = z
   .strict();
 
 /** What the installed modules do for a source kind they collect themselves (their server.ts sourceKinds). */
-const kindHooks = (kind: string) => serverModules().flatMap((m) => m.sourceKinds?.[kind] ?? []);
+const kindHooks = (kind: string, sourceId: string) => serverModules().flatMap((m) => m.sourceKinds?.[kind] ?? []).filter((h) => !h.matches || h.matches(sourceId));
 
 export async function updateSource(id: string, input: { patch: unknown; version: string; reason?: string }, actor: string) {
   const patch = EDITABLE.parse(input.patch);
@@ -139,7 +139,7 @@ export async function updateSource(id: string, input: { patch: unknown; version:
     const values = Object.fromEntries(keys.map((k) => [k, k === "config" ? tx.json(patch.config as never) : patch[k]]));
     // A module that collects this kind hears of the resume first, in the same transaction, so the row
     // returned below has what it stamps.
-    if (patch.enabled === true && !before.enabled) for (const h of kindHooks(String(before.kind))) await h.resumed?.(id, tx);
+    if (patch.enabled === true && !before.enabled) for (const h of kindHooks(String(before.kind), id)) await h.resumed?.(id, tx);
     const [after] = await tx`UPDATE sources SET ${tx(values as never, ...(keys as string[]))}, updated_at = now(),
       health = CASE WHEN ${patch.enabled ?? null}::boolean IS FALSE THEN 'paused' WHEN ${patch.enabled ?? null}::boolean IS TRUE AND health = 'paused' THEN 'unknown' ELSE health END,
       next_fetch_at = CASE WHEN ${patch.enabled ?? null}::boolean IS TRUE THEN now() ELSE next_fetch_at END
@@ -228,7 +228,7 @@ export async function createSource(input: unknown, actor: string): Promise<Befor
 export async function fetchNow(id: string, actor: string) {
   const [s] = await sql<{ id: string; kind: string; config: Record<string, unknown> }[]>`SELECT id, kind, config FROM sources WHERE id = ${id}`;
   if (!s) return null;
-  const own = kindHooks(s.kind).find((h) => h.fetchNow)?.fetchNow;
+  const own = kindHooks(s.kind, s.id).find((h) => h.fetchNow)?.fetchNow;
   if (own) {
     await audit(actor, "source.fetch", `source:${id}`, null, null, await own(s));
     return { jobId: null };

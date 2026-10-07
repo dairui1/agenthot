@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "dependencies": { "@aihot/agentlab": "*" },
   "exports": {
     ".": "./site.ts",
     "./models": "./models.ts",
