@@ -19,6 +19,10 @@ export interface ModelPreset {
 
 /** 具名的模型示例（每个要配自己的密钥）。用不上可以删掉。 */
 export const PRESETS: Record<string, ModelPreset> = {
+  "gpt-6.1-sol": {
+    service: "codex-cli", model: "gpt-6.1-sol", baseUrlEnv: "CODEX_CLI_BASE_URL", apiKeyEnv: "CODEX_CLI_TOKEN",
+    extra: { reasoning_effort: "low", agenthot_transport: "codex-cli-v1" }, jsonMode: true, vision: false,
+  },
   // GLM 5.3 Flash always reasons; the lowest effort keeps short structured tasks fast.
   "glm-5.3-flash": {
     service: "zhipu", model: "glm-5.3-flash", baseUrlEnv: "ZHIPU_BASE_URL", apiKeyEnv: "ZHIPU_API_KEY",

@@ -46,3 +46,14 @@ Production domain, model credentials/budgets, sources, editorial categories and 
 - Chromium desktop (1440x1000) and mobile (390x844) screenshots showed no horizontal overflow or page errors.
 - No real model call, scoring-quality evaluation, content collection or production deployment was performed. The preview contains no news.
 - Icons were regenerated from the AgentHot monogram with `node scripts/agenthot-icons.ts`. Report nameplates use the upstream generator and Noto Sans SC, retaining its existing font license.
+
+## Codex Integration Verification (2026-10-07)
+
+The owner selected the existing Codex CLI login and `gpt-6.1-sol`, matching AgentLab's model/runtime choice. The local adapter is isolated under `modules/codex-cli/`; no engine provider or pipeline code was changed. Runtime credentials live only in ignored `.data/codex.env`. Site model declarations are included in the environment-name architecture check.
+
+- Typecheck, web build, 659 non-backup tests and 42 web tests passed. The previous backup dependency gap remains.
+- Five real stored articles were processed through the upstream extraction, analysis, publication and grouping functions: four passed relevance and three qualified for selection; an unrelated TTS leaderboard was blocked. This is a smoke sample, not a selection-quality benchmark.
+- 21 completed receipts identify `gpt-6.1-sol`, report token usage and record that CLI temperature/output-token parameters are not applied. Reprocessing Holo4 reused its receipts without increasing the call count. A separate minimal connection check was run outside editorial receipts.
+- Local fake-CLI tests cover output parsing, process timeout cleanup and rejecting unexpected tool activity. An integration test confirms timeout/disconnect retains an unknown receipt, rather than silently releasing the request for retry.
+- The request budget is initialized through the existing audited admin API: 12/minute, 60/hour, 120/day; existing operator settings are preserved. These caps do not measure remaining Codex account quota.
+- Model selection uses private local `*_MODEL` overrides; the shipped upstream defaults remain compatible with its API-provider tests. No continuous worker, scheduler, production deployment or paid collector was enabled.
