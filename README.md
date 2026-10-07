@@ -2,7 +2,7 @@
 
 面向 Agent 开发者与重度用户的动态站。基于 [AIHOT](https://github.com/KKKKhazix/AIHOT) 独立 fork，保留采集、精选、事件归组、热点、日报、管理后台及原有页面，不重写引擎。
 
-当前是本地验证版，尚未上线。模板默认关闭采集、模型与通知；不包含密钥和运行数据。本机已接入登录态 Codex CLI，模型为 `gpt-6.1-sol`，接入与限制见 [Codex 适配器](modules/codex-cli/README.md)。
+公开试运行地址：[agenthot.dairui1.com](https://agenthot.dairui1.com)。首版发布少量已处理内容，自动采集、模型任务与通知保持关闭；不包含密钥和运行数据。本机已接入登录态 Codex CLI，模型为 `gpt-6.1-sol`，接入与限制见 [Codex 适配器](modules/codex-cli/README.md)。生产环境不保存 Codex 登录态，部署流程见 [AgentHot 部署](deploy/agenthot.md)。
 
 ## 定制范围
 

@@ -25,7 +25,7 @@ export const SITE = {
    */
   subject: "Agent",
   /** 首页的完整标题（浏览器标签、搜索结果）。 */
-  homeTitle: "AgentHot — Agent 动态 · 每日精选与日报",
+  homeTitle: "AgentHot · Agent 动态与精选",
   /** 主题目录页（/topics）的标题。 */
   topicsTitle: "Agent 主题：产品与厂商、工程方向、研究与实践",
   /** 反馈表单输入框里的示例。 */
@@ -35,7 +35,7 @@ export const SITE = {
   /** 反馈表单邮箱框里的提示。 */
   feedbackEmailHint: "留下邮箱，我们可以回信联系你",
   /** 一句话介绍：搜索引擎、分享卡片、RSS、llms.txt 会用。 */
-  description: `追踪 Coding Agent、Harness、浏览器与桌面 Agent 的发布、研究和工程实践，把同一件事的报道归到一起，${EDITION_WHEN.daily} 出一份日报。`,
+  description: "关注 Coding Agent、Harness、浏览器与桌面 Agent 的发布、研究和工程实践。当前为试运行，收录少量已处理内容，自动更新与定时报告尚未启用。",
   /** llms.txt 里一句话介绍下面的一段详细介绍（选填）。 */
   llmsIntro: null as string | null,
   /** 一行小字：分享图、海报下方。 */
@@ -43,7 +43,7 @@ export const SITE = {
   /** 搜索引擎读到的关键词（首页结构化数据）。 */
   keywords: ["Agent 动态", "Coding Agent", "Agent Harness", "CUA", "Agentic RL", "Agent 日报"] as string[],
   /** 网站开始收录的年份（结构化数据的时间范围，选填）。 */
-  since: null as string | null,
+  since: "2026" as string | null,
   /** 界面语言（HTML lang、og:locale）。 */
   locale: "zh-CN",
   /** 默认域名，只在没设置 SITE_URL 时使用。 */
@@ -136,14 +136,14 @@ export const ABOUT = {
   /** 大标题：第一行正常颜色，第二行强调色。 */
   headline: ["Agent 每天都有新动静，", "值得看的，只有几条。"] as [string, string],
   /** 标题下面的一段话。{sources} 会换成实时的信源数（两边自动加空格，所以 {sources} 两边不写空格）；统计没取到时换成 sourcesFallback。 */
-  lead: `${SITE.name} 替你盯着{sources}个信源：抓取、归并、打分、精选，${EDITION_WHEN.daily} 出一份日报。免费，不用注册。`,
+  lead: `${SITE.name} 当前配置了{sources}个候选信源。首版展示少量已处理的动态与精选，自动更新和定时报告暂未启用。免费，不用注册。`,
   sourcesFallback: "十几",
   /** 信源河动画下面的四个环节。 */
   steps: {
-    collect: "官方博客、媒体和个人的订阅源都在看；更新越勤的源看得越勤，最快 15 分钟看一次。",
+    collect: "首版从公开 RSS 中试采样，尚未覆盖所有厂商与项目。",
     store: "抓到的都存下来，同一件事的报道归到一起，热点榜就是从这里算出来的。",
-    select: `模型先看是不是这个行业的事、有没有实际信息，再写中文标题、摘要和${ITEM_COPY.reasonLabel}；营销稿和重复转发进不来。`,
-    publish: `${EDITION_WHEN.daily} 出日报，${EDITION_WHEN.weekly} 出周报，${EDITION_WHEN.monthly} 出月报。`,
+    select: `模型判断 Agent 相关性，再写中文标题、摘要和${ITEM_COPY.reasonLabel}；筛选标准还在校准，判断可能有误。`,
+    publish: "目前先开放已有摘要与原文链接，日报、周报和月报尚未开始定时发布。",
   },
   /**
    * 作者块（选填），null 就不显示。
@@ -187,7 +187,7 @@ export const REPORTS = {
   motto: SITE.subject as string,
   /** 每种报告页面的描述（搜索结果、分享卡片），不带句号；llms.txt 介绍周报、月报时也用它。 */
   descriptions: {
-    daily: `${SITE.name} ${subjectAfter(`${EDITION_WHEN.daily}（北京时间）发布的`, "行业精编日报")}`,
+    daily: `${SITE.name} Agent 日报，试运行期间尚未启用定时出刊`,
     weekly: subjectAfter("每周", "行业综合回顾"),
     monthly: subjectAfter("每月", "行业盘点"),
   },
@@ -236,7 +236,7 @@ export const CARDS: Record<string, { kicker: string; title: string; subtitle: st
   site: { kicker: subjectAfter("每日", "精选"), title: SITE.tagline, subtitle: SITE.description },
   all: { kicker: subjectAfter("全部", "动态"), title: "所有信源的最新动态，一站看完", subtitle: "按时间汇总各信源的最新动态，可按类别与标签筛选。" },
   hot: { kicker: "热点榜", title: "过去 48 小时，大家在讨论什么", subtitle: "热度指数、趋势与组成热度的公开来源。", accent: "hot" },
-  daily: { kicker: withSubject("日报"), title: subjectAfter(`每天 ${spokenTime(EDITION_TIMES.daily)}，一份读得完的`, "日报"), subtitle: `${subjectAfter("前一天值得关注的", "动态")}。` },
+  daily: { kicker: withSubject("日报"), title: "Agent 日报", subtitle: "试运行期间尚未启用定时出刊。" },
   weekly: { kicker: withSubject("周报"), title: `一周${REPORTS.entry.noun}，一次看清`, subtitle: "本周的主线、重要发布与值得回看的讨论。" },
   monthly: { kicker: withSubject("月报"), title: "一个月的变化", subtitle: "月度主线与关键事件回顾。" },
   about: { kicker: "关于", title: `关于 ${SITE.name}`, subtitle: SITE.description },

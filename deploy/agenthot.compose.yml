@@ -1,0 +1,104 @@
+# Merge after docker-compose.yml. Requires Docker Compose 2.24.4+ for !override.
+name: agenthot
+
+x-agenthot-logging: &agenthot-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-agenthot-backend-env: &agenthot-backend-env
+  NODE_ENV: production
+  AIHOT_ENVIRONMENT: production
+  SITE_URL: https://agenthot.dairui1.com
+  DATABASE_URL: postgres://aihot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private .env}@db:5432/aihot
+  COLLECT_ENABLED: "false"
+  MODEL_CALLS_ENABLED: "false"
+  FEISHU_CONTENT_PUSH_ENABLED: "false"
+  FEISHU_INTERNAL_ENABLED: "false"
+  INDEXNOW_SUBMIT_ENABLED: "false"
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private .env}
+    logging: *agenthot-logging
+    mem_limit: 768m
+    pids_limit: 256
+
+  setup:
+    image: agenthot-app
+    init: true
+    environment: *agenthot-backend-env
+    logging: *agenthot-logging
+    mem_limit: 512m
+    pids_limit: 256
+
+  api:
+    image: agenthot-app
+    init: true
+    environment: *agenthot-backend-env
+    logging: *agenthot-logging
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health', {signal: AbortSignal.timeout(4000)}).then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  worker:
+    image: agenthot-app
+    init: true
+    profiles: ["processing"]
+    environment: *agenthot-backend-env
+    logging: *agenthot-logging
+    mem_limit: 768m
+    pids_limit: 256
+
+  web:
+    image: agenthot-app
+    init: true
+    environment:
+      NODE_ENV: production
+      SITE_URL: https://agenthot.dairui1.com
+      TRUST_PROXY: "true"
+    ports: !override
+      - "127.0.0.1:4310:3000"
+    networks:
+      - default
+      - dokploy-network
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: dokploy-network
+      traefik.http.services.agenthot.loadbalancer.server.port: "3000"
+      traefik.http.routers.agenthot.rule: Host(`agenthot.dairui1.com`)
+      traefik.http.routers.agenthot.entrypoints: websecure
+      traefik.http.routers.agenthot.tls: "true"
+      traefik.http.routers.agenthot.tls.certresolver: letsencrypt
+      traefik.http.routers.agenthot.service: agenthot
+      traefik.http.routers.agenthot-http.rule: Host(`agenthot.dairui1.com`)
+      traefik.http.routers.agenthot-http.entrypoints: web
+      traefik.http.routers.agenthot-http.middlewares: redirect-to-https@file
+      traefik.http.routers.agenthot-http.service: agenthot
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *agenthot-logging
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health', {signal: AbortSignal.timeout(4000)}).then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  caddy:
+    logging: *agenthot-logging
+
+networks:
+  dokploy-network:
+    external: true
+    name: dokploy-network

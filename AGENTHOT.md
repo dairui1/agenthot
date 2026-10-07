@@ -33,6 +33,20 @@ node scripts/smoke.ts --base http://localhost:3000
 
 Production domain, model credentials/budgets, sources, editorial categories and `site/pages/terms.md` / `privacy.md` require owner confirmation before launch. No production deployment is implied by this bootstrap.
 
+## Public Reader Deployment
+
+On 2026-10-07 the owner requested `https://agenthot.dairui1.com` and confirmed a
+public reader release: existing summaries and source links, no reader accounts or
+advertising tracking, operational logs, and feedback received by the owner. The
+deployment overlay and runbook are in `deploy/agenthot.compose.yml` and
+`deploy/agenthot.md`. Automatic collection, model calls, notifications and the
+worker remain disabled. Codex login credentials stay on the operator Mac.
+
+The first content transfer excludes the local task queue, administrator accounts
+and sessions, and feedback records. Production uses fresh independent secrets.
+Public deployment acceptance must verify the actual domain and release rather
+than relying on a successful image build.
+
 ## Upstream Maintenance
 
 `origin` is `dairui1/agenthot`; `upstream` is `KKKKhazix/AIHOT`. Fetch and review upstream changes, merge in a branch, then rerun typecheck, database tests, web tests and smoke checks. Do not mass-rename `@aihot/*` or modify historic migrations for branding.
