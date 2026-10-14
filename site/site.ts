@@ -187,7 +187,7 @@ export const REPORTS = {
   motto: SITE.subject as string,
   /** 每种报告页面的描述（搜索结果、分享卡片），不带句号；llms.txt 介绍周报、月报时也用它。 */
   descriptions: {
-    daily: `${SITE.name} Agent 日报，试运行期间尚未启用定时出刊`,
+    daily: `${SITE.name} Agent 日报，每天 10:00 开始更新，按 08:00 窗口编排`,
     weekly: subjectAfter("每周", "行业综合回顾"),
     monthly: subjectAfter("每月", "行业盘点"),
   },
@@ -236,7 +236,7 @@ export const CARDS: Record<string, { kicker: string; title: string; subtitle: st
   site: { kicker: subjectAfter("每日", "精选"), title: SITE.tagline, subtitle: SITE.description },
   all: { kicker: subjectAfter("全部", "动态"), title: "所有信源的最新动态，一站看完", subtitle: "按时间汇总各信源的最新动态，可按类别与标签筛选。" },
   hot: { kicker: "热点榜", title: "过去 48 小时，大家在讨论什么", subtitle: "热度指数、趋势与组成热度的公开来源。", accent: "hot" },
-  daily: { kicker: withSubject("日报"), title: "Agent 日报", subtitle: "试运行期间尚未启用定时出刊。" },
+  daily: { kicker: withSubject("日报"), title: "Agent 日报", subtitle: "每天 10:00 开始更新 · 08:00 截稿" },
   weekly: { kicker: withSubject("周报"), title: `一周${REPORTS.entry.noun}，一次看清`, subtitle: "本周的主线、重要发布与值得回看的讨论。" },
   monthly: { kicker: withSubject("月报"), title: "一个月的变化", subtitle: "月度主线与关键事件回顾。" },
   about: { kicker: "关于", title: `关于 ${SITE.name}`, subtitle: SITE.description },

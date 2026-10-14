@@ -34,9 +34,11 @@ explicit suppression/withdrawal without overwriting administrator decisions.
 Omission alone never removes an article. Research articles are not imported until
 they have a reliable first-publication date.
 
-The general worker, RSS collectors, model calls and notification valves remain
-off in production; only this bounded AgentLab synchronization runs. The separate
-Compose service has no public port and carries no Codex/ChatGPT credentials.
+The general worker and collection/model valves remain off in the long-running
+production services. A separate operator-Mac daily job can enable RSS collection
+and local Codex analysis in a bounded, temporary production container; see
+[`deploy/agenthot-daily.md`](deploy/agenthot-daily.md). Notifications remain off.
+The AgentLab Compose service has no public port and carries no Codex/ChatGPT credentials.
 
 Scoring types, five-axis weights and thresholds remain upstream defaults. Run SelectBench with 100-200 user-labelled samples before claiming selection quality. Source code, project-reported results and independent reproduction must not be conflated.
 
@@ -91,6 +93,18 @@ than relying on a successful image build.
 - No recurring backup job is enabled. The first content-transfer dump is retained
   in private operator storage; use the runbook for subsequent matched DB/files
   backups before updating. Production credentials are ignored, mode `0600` files.
+
+## Daily Publication
+
+The daily runner is site-specific code in `modules/daily-publish/` with a local
+transport at `scripts/agenthot-daily.py`. It reuses the upstream engine and public
+reading layer. The daily heartbeat starts at 10:00 UTC+8; the existing edition
+cutoff stays 08:00, so newly admitted material after that cutoff belongs to the
+next issue. No model credentials are installed on the server. Do not start the
+general worker or enable other paid collectors to compensate for a failed run.
+Run `--check` before `--run`, preserve budgets and unknown receipts, and verify the
+actual dated issue rather than the last good page. Historical first-import
+backfill does not qualify as today's news and is not a daily-processing backlog.
 
 ## Upstream Maintenance
 

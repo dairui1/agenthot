@@ -21,8 +21,9 @@ the collection, publication and authentication engine remains unchanged.
   and does not enable the RSS collectors or general worker. Source metadata and
   pause/resume remain in the existing admin sources page.
 - No Codex executable, ChatGPT login, OAuth file or local adapter token is deployed.
-  Opening public pages never invokes a model. A supported processing deployment,
-  budget setup and explicit review of these valves are separate work.
+  Opening public pages never invokes a model. The optional
+  [operator-Mac daily job](agenthot-daily.md) uses a temporary loopback SSH tunnel
+  and one-shot container, not a server-side Codex login or the general worker.
 - The owner must confirm the source policy, usage terms and privacy notice before
   publication. Do not publish the upstream `site/pages/` placeholders.
 
