@@ -3,6 +3,7 @@
 // inline bodies only for sources that explicitly allow redistribution. Titles come from the site's
 // name and categories.
 import { feedCategoryLabel, PUBLIC_API_CATEGORY_KEYS, toPublicApiCategory, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { beijingDate, beijingTime } from "@aihot/contracts/time";
 import { EDITION_WHEN, FEED_COPY, REPORTS, SITE, subjectAfter } from "@aihot/site";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
@@ -205,7 +206,8 @@ function issueXml(kind: ReportKind, r: FeedIssue): string {
   const name = `${SITE.name} ${ISSUE_NAME[kind]}`;
   const title = r.headline ? `${name} · ${r.key} — ${r.headline}` : `${name} · ${r.key}`;
   const contents = r.sections.map((s) => `<p><strong>${escapeXml(s.label)}</strong></p>\n<ul>${s.items.map((i) => `<li><a href="${escapeXml(i.link)}">${escapeXml(i.title)}</a></li>`).join("")}</ul>`);
-  const description = [`<p>${escapeXml(r.leadParagraph ?? r.headline ?? "")}</p>`, ...contents, `<p>via ${escapeXml(SITE.name)} · <a href="${url}">${url}</a></p>`].join("\n");
+  const early = r.edition ? `提前版 · 截至 ${beijingDate(r.edition.windowEnd)} ${beijingTime(r.edition.windowEnd)}（UTC+8）` : null;
+  const description = [...(early ? [`<p>${escapeXml(early)}</p>`] : []), `<p>${escapeXml(r.leadParagraph ?? r.headline ?? "")}</p>`, ...contents, `<p>via ${escapeXml(SITE.name)} · <a href="${url}">${url}</a></p>`].join("\n");
   return `    <item>
       <title>${cdata(title)}</title>
       <link>${url}</link>

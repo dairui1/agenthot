@@ -36,11 +36,23 @@ export function dailyMetrics(main: EditionEntry[]) {
 }
 
 type ReportKind = "daily" | "weekly" | "monthly";
+type SavedEdition = { content: unknown; window_end: Date };
+
+/** Only an explicit, coherent early edition may be automatically replaced after its cutoff. */
+function provisionalDaily(row: SavedEdition, key: string): boolean {
+  if (!row.content || typeof row.content !== "object" || !("edition" in row.content)) return false;
+  const edition = row.content.edition;
+  if (!edition || typeof edition !== "object" || !("status" in edition) || edition.status !== "provisional"
+    || !("scheduledWindowEnd" in edition) || typeof edition.scheduledWindowEnd !== "string") return false;
+  const scheduled = beijingAt(key, EDITION_TIMES.daily).getTime();
+  return Number.isFinite(scheduled) && new Date(edition.scheduledWindowEnd).getTime() === scheduled
+    && row.window_end.getTime() > scheduled - 86400000 && row.window_end.getTime() < scheduled;
+}
 
 /** How many events an issue already published carries; nothing when it does not exist yet. */
 async function savedReport(kind: ReportKind, key: string) {
-  const [row] = await sql<{ entries: number }[]>`
-    SELECT coalesce(CASE WHEN kind = 'daily' THEN (content->'metrics'->>'totalEvents')::int ELSE jsonb_array_length(content->'storyOrder') END, 0) AS entries
+  const [row] = await sql<({ entries: number } & SavedEdition)[]>`
+    SELECT content, window_end, coalesce(CASE WHEN kind = 'daily' THEN (content->'metrics'->>'totalEvents')::int ELSE jsonb_array_length(content->'storyOrder') END, 0) AS entries
     FROM reports WHERE kind = ${kind} AND key = ${key}`;
   return row;
 }
@@ -50,16 +62,23 @@ async function savedReport(kind: ReportKind, key: string) {
  * it is. With a reason (an explicit regeneration) the issue is replaced and the edition it replaces is
  * kept as a revision. Says whether the issue was written.
  */
-async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[]): Promise<boolean> {
+async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[], dailyMode?: "provisional" | "finalize"): Promise<boolean> {
   return sql.begin(async (tx) => {
     const insert = async () => (await tx`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, model, origin)
       VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (kind, key) DO NOTHING`).count > 0;
     let written: boolean;
-    if (reason === undefined) written = await insert();
+    if (kind === "daily" && await insert()) written = true;
+    else if (reason === undefined) written = await insert();
     else {
-      const [existing] = await tx<{ id: number; revision: number; content: unknown; generated_at: Date }[]>`
-        SELECT id, revision, content, generated_at FROM reports WHERE kind = ${kind} AND key = ${key} FOR UPDATE`;
+      const [existing] = await tx<({ id: number; revision: number; generated_at: Date } & SavedEdition)[]>`
+        SELECT id, revision, content, generated_at, window_end FROM reports WHERE kind = ${kind} AND key = ${key} FOR UPDATE`;
       if (existing) {
+        // The unique insert handles concurrent first editions; the row lock protects revisions.
+        // A stale early/finalizing run must never replace a final edition or move an early cutoff back.
+        if (dailyMode && (!provisionalDaily(existing, key)
+          || (dailyMode === "provisional" && existing.window_end.getTime() >= end.getTime()))) return false;
+        if (kind === "daily" && dailyMode !== "provisional" && provisionalDaily(existing, key)
+          && beijingAt(key, EDITION_TIMES.daily).getTime() > Date.now()) return false;
         await tx`INSERT INTO report_revisions (report_id, revision, content, generated_at, reason)
                  VALUES (${existing.id}, ${existing.revision}, ${tx.json(existing.content as never)}, ${existing.generated_at}, ${reason}) ON CONFLICT DO NOTHING`;
         await tx`UPDATE reports SET content = ${tx.json(content as never)}, window_start = ${start}, window_end = ${end}, generated_at = now(),
@@ -86,11 +105,32 @@ function windowPoint(at: Date): string {
  * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
  * (REPORTS.quiet).
  */
-export async function composeDaily(date: string, reason?: string): Promise<{ key: string; entries: number }> {
+export async function composeDaily(date: string, reason?: string, options: { asOf?: Date } = {}): Promise<{ key: string; entries: number }> {
+  const scheduledEnd = beijingAt(date, EDITION_TIMES.daily);
+  const start = new Date(scheduledEnd.getTime() - 86400000);
+  const now = Date.now();
+  const end = options.asOf ?? scheduledEnd;
+  // An early issue covers only the already elapsed part of the currently open daily window.
+  if (options.asOf !== undefined && (!Number.isFinite(end.getTime()) || end <= start || end >= scheduledEnd
+    || end.getTime() > now || scheduledEnd.getTime() <= now)) throw new Error(`daily ${date}: invalid provisional cutoff`);
   const previous = await savedReport("daily", date);
-  if (previous && reason === undefined) return { key: date, entries: previous.entries };
-  const end = beijingAt(date, EDITION_TIMES.daily);
-  const start = new Date(end.getTime() - 86400000);
+  const wasProvisional = previous && provisionalDaily(previous, date);
+  let dailyMode: "provisional" | "finalize" | undefined;
+  if (options.asOf !== undefined) {
+    if (previous && (!wasProvisional || previous.window_end >= end)) return { key: date, entries: previous.entries };
+    dailyMode = "provisional";
+    reason ??= "advance provisional daily cutoff";
+  } else if (wasProvisional) {
+    if (scheduledEnd.getTime() > now) return { key: date, entries: previous.entries };
+    // The normal scheduled call completes an early edition once, preserving it as a revision.
+    dailyMode = "finalize";
+    reason ??= "finalize provisional daily at scheduled cutoff";
+  } else if (previous && reason === undefined) return { key: date, entries: previous.entries };
+  else if (reason === undefined) {
+    // Recheck a competing early insert inside saveReport even when none existed at the first read.
+    dailyMode = "finalize";
+    reason = "finalize provisional daily at scheduled cutoff";
+  }
   const edition = await dailyEdition(date, start, end);
   // Nothing judged in the window is a failure upstream, not a quiet day: the run fails and is caught up later.
   if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
@@ -110,9 +150,14 @@ export async function composeDaily(date: string, reason?: string): Promise<{ key
     metrics: dailyMetrics(issue.main),
     windowStart: start.toISOString(),
     windowEnd: end.toISOString(),
+    ...(dailyMode === "provisional" ? { edition: { status: "provisional", scheduledWindowEnd: scheduledEnd.toISOString() } } : {}),
     generator: { version: REPORT_VERSION, ...edition.stats, ...issue.stats },
   };
-  await saveReport("daily", date, start, end, content, reason, null, []);
+  const written = await saveReport("daily", date, start, end, content, reason, null, [], dailyMode);
+  if (!written) {
+    const saved = await savedReport("daily", date);
+    if (saved) return { key: date, entries: saved.entries };
+  }
   return { key: date, entries: issue.main.length };
 }
 
@@ -193,6 +238,9 @@ export function fitted(text: string, max: number): string | null {
 async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined) {
   const previous = await savedReport(kind, key);
   if (previous && reason === undefined) return { key, entries: previous.entries };
+  const [unfinished] = await sql`SELECT 1 FROM reports WHERE kind = 'daily' AND key >= ${startDate} AND key <= ${endDateInclusive}
+    AND content->'edition'->>'status' = 'provisional' LIMIT 1`;
+  if (unfinished) throw new Error(`${kind} ${key}: provisional daily is not finalized`);
   // The dailies' windows run from the edition time the day before the first to that time on the last.
   const start = beijingAt(addDays(startDate, -1), EDITION_TIMES.daily);
   const end = beijingAt(endDateInclusive, EDITION_TIMES.daily);
@@ -301,8 +349,9 @@ export async function composeDueReports(now = new Date(), limit = 8): Promise<{ 
     { kind: "monthly", due: dueMonthly(now), next: nextMonth, compose: composeMonthly },
   ];
   kinds: for (const k of kinds) {
-    const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = ${k.kind}`).map((r) => r.key));
-    const first = [...have].sort()[0] ?? k.due;
+    const saved = await sql<({ key: string } & SavedEdition)[]>`SELECT key, content, window_end FROM reports WHERE kind = ${k.kind}`;
+    const have = new Set(saved.filter((r) => k.kind !== "daily" || !provisionalDaily(r, r.key)).map((r) => r.key));
+    const first = saved.map((r) => r.key).sort()[0] ?? k.due;
     for (let key = first; key <= k.due; key = k.next(key)) {
       if (have.has(key)) continue;
       if (shutdownSignal.signal.aborted || generated.length >= limit) break kinds;

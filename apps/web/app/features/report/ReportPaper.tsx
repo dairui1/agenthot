@@ -18,7 +18,7 @@ import { SourceAvatar } from "../../components/ui/SourceAvatar";
 import { Halftone } from "./Halftone";
 import { Nameplate } from "./Nameplate";
 import { IssueDots } from "./IssueDots";
-import { monthDay } from "../../lib/format";
+import { monthDay, monthDayTime } from "../../lib/format";
 import { EDITION, KIND_LABEL, MOTTO, dateLine, dateMark, headline, metricItems, neighbourLabel, reportPath, shortDay } from "./format";
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -36,7 +36,7 @@ function Masthead({ report, index, quiet }: { report: ReportDetail; index: Repor
       <div className="flex items-center justify-between gap-4 text-[12px] text-ink-4">
         <span className="num">{dateLine(report.kind, report.key)}</span>
         <span className="hidden tracking-[0.3em] @[640px]:inline">{MOTTO[report.kind]}</span>
-        <span>{EDITION[report.kind]}</span>
+        <span>{report.edition?.status === "provisional" ? "提前出刊" : EDITION[report.kind]}</span>
       </div>
 
       <div className="flex items-stretch justify-between gap-5 py-6 @[880px]:gap-10 @[880px]:py-8">
@@ -63,6 +63,12 @@ function Masthead({ report, index, quiet }: { report: ReportDetail; index: Repor
           <IssueDots kind={report.kind} reportKey={report.key} issueNumber={report.issueNumber} index={index} className="hidden w-[176px] border-l border-line px-4 py-4 @[760px]:block @[880px]:w-[196px]" />
         </div>
       </div>
+
+      {report.edition?.status === "provisional" && (
+        <p className="mb-3 text-[12px] text-ink-3">
+          提前版 · 截至 <time dateTime={report.edition.windowEnd}>{monthDayTime(report.edition.windowEnd)}（UTC+8）</time>
+        </p>
+      )}
 
       {/* A quiet day has no figures to set and nothing to read through: the masthead just closes. */}
       {quiet ? (

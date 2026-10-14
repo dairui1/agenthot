@@ -198,7 +198,7 @@ function registerTools(server: McpServer, say: typeof ok) {
       if (args.date && !isValidDate(args.date)) return fail("invalid_request", `${args.date} 不是有效日期。`);
       const res = await recent(`daily:${args.date ?? "latest"}`, () => dailyWithNotes(args.date ?? "latest"));
       if (!res) return fail("not_found", args.date ? `没有 ${args.date} 的公开日报。` : "还没有公开日报。");
-      return say(dailyAnswer(res.body.report, "mcp", res.notes), res.body);
+      return say(dailyAnswer(res.body.report, "mcp", res.notes, res.edition), res.body);
     }),
   );
 

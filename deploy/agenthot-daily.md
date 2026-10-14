@@ -74,6 +74,19 @@ fails with `nothing judged in its window`. Report this as awaiting the first liv
 issue, not as a successfully published quiet day. A legitimately quiet issue is
 possible only after the engine has actually judged material in that window.
 
+An explicit owner request can publish the current issue early. This uses the
+native daily composer with an `asOf` cutoff: the window starts at the previous
+scheduled cutoff but ends at the actual publication time, never in the future.
+The saved issue is marked provisional, and public pages and Agent responses
+identify it as an early edition. It is not a completed 08:00 edition.
+
+After the scheduled cutoff, the normal daily composer finalizes that provisional
+issue with the full window and retains the early content as a report revision.
+Already-final issues remain unchanged on automatic retries. An early edition
+cannot replace a final issue or move an existing cutoff backward. The daily
+heartbeat still starts at 10:00; early publication is an explicit manual action,
+not an additional recurring run or permission to change the edition schedule.
+
 After a run, check the exit code, source outcomes, live remainder, receipt states
 and exact issue date. Verify the real `/daily`, its dated issue and
 `/api/health` at `https://agenthot.dairui1.com`. Do not claim success from HTTP 200

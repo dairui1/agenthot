@@ -21,6 +21,12 @@ interface ReportRow {
   generated_at: Date;
 }
 
+function provisionalEdition(kind: ReportKind, content: ReportRow["content"], windowEnd: Date): ReportDetail["edition"] {
+  const scheduledEnd = typeof content.edition?.scheduledWindowEnd === "string" ? Date.parse(content.edition.scheduledWindowEnd) : NaN;
+  if (kind !== "daily" || content.edition?.status !== "provisional" || !(scheduledEnd > windowEnd.getTime())) return undefined;
+  return { status: "provisional", windowEnd: windowEnd.toISOString(), scheduledWindowEnd: new Date(scheduledEnd).toISOString() };
+}
+
 interface Availability {
   available: boolean;
   /** The article's public summary, for issues saved before summaries were frozen into them. */
@@ -324,8 +330,8 @@ async function neighbors(kind: ReportKind, key: string): Promise<{ prev: string 
 
 export async function loadReport(kind: ReportKind, key: string): Promise<ReportDetail | null> {
   // Its number counts every issue of the kind up to it, as the index numbers them (reportIndexRows).
-  const [r] = await sql<(Pick<ReportRow, "content" | "generated_at"> & { issue_number: number })[]>`
-    SELECT r.content, r.generated_at, (SELECT count(*)::int FROM reports earlier WHERE earlier.kind = r.kind AND earlier.key <= r.key) AS issue_number
+  const [r] = await sql<(Pick<ReportRow, "content" | "generated_at" | "window_end"> & { issue_number: number })[]>`
+    SELECT r.content, r.generated_at, r.window_end, (SELECT count(*)::int FROM reports earlier WHERE earlier.kind = r.kind AND earlier.key <= r.key) AS issue_number
     FROM reports r WHERE r.kind = ${kind} AND r.key = ${key}`;
   if (!r) return null;
   const c = r.content;
@@ -362,12 +368,14 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
   const headline = kind === "daily" ? null : periodicHeadline(c);
   const title = kind === "daily" ? `${withSubject("日报")} · ${key}`
     : String((hasCitedLead && c.title === headline ? named?.title : c.title) ?? (kind === "weekly" ? `${SITE.name} 周报 · ${key}` : `${SITE.name} 月报 · ${key}`));
+  const edition = provisionalEdition(kind, c, r.window_end);
   return {
     kind,
     key,
     issueNumber: r.issue_number,
     title,
     generatedAt: r.generated_at.toISOString(),
+    ...(edition ? { edition } : {}),
     lead: hasCitedLead
       ? (named ? { title: named.title, leadParagraph: (kind === "daily" ? named.leadParagraph : overview) ?? "" } : null)
       : kind === "daily" ? c.lead ?? null
@@ -504,7 +512,7 @@ export async function dailyWithNotes(date: string | "latest") {
       })),
     },
   };
-  return { body, notes };
+  return { body, notes, edition: provisionalEdition("daily", c, r.window_end) };
 }
 
 export async function v1Daily(date: string | "latest") {
@@ -514,6 +522,7 @@ export async function v1Daily(date: string | "latest") {
 export interface FeedIssue {
   key: string;
   generatedAt: Date;
+  edition?: ReportDetail["edition"];
   headline: string | null;
   /** A daily's lead paragraph; a weekly's or monthly's overview. */
   leadParagraph: string | null;
@@ -526,16 +535,17 @@ export interface FeedIssue {
  */
 export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedIssue[]> {
   const rows = kind === "daily"
-    ? await sql<{ key: string; generated_at: Date; content: Record<string, any> }[]>`
-      SELECT key, generated_at, jsonb_build_object(
+    ? await sql<{ key: string; generated_at: Date; window_end: Date; content: Record<string, any> }[]>`
+      SELECT key, generated_at, window_end, jsonb_build_object(
+        'edition', content->'edition',
         'lead', content->'lead', 'leadItemId', content->'leadItemId', 'highlights', content->'highlights',
         'sections', (SELECT coalesce(jsonb_agg(jsonb_build_object('label', s->'label', 'items',
           (SELECT coalesce(jsonb_agg(jsonb_build_object('itemId', i->'itemId', 'title', i->'title') ORDER BY ord), '[]'::jsonb)
            FROM jsonb_array_elements(coalesce(s->'items', '[]'::jsonb)) WITH ORDINALITY AS e(i, ord))) ORDER BY sord), '[]'::jsonb)
           FROM jsonb_array_elements(coalesce(content->'sections', '[]'::jsonb)) WITH ORDINALITY AS x(s, sord))) AS content
       FROM reports WHERE kind = 'daily' ORDER BY key DESC LIMIT ${limit}`
-    : await sql<{ key: string; generated_at: Date; content: Record<string, any> }[]>`
-      SELECT key, generated_at, jsonb_build_object(
+    : await sql<{ key: string; generated_at: Date; window_end: Date; content: Record<string, any> }[]>`
+      SELECT key, generated_at, window_end, jsonb_build_object(
         'headline', content->'headline', 'title', content->'title', 'overview', content->'overview',
         'leadItemId', content->'leadItemId', 'highlights', content->'highlights',
         'themes', (SELECT coalesce(jsonb_agg(jsonb_build_object('heading', t->'heading', 'storyRefs',
@@ -548,12 +558,14 @@ export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedI
   const leads = kind === "daily" ? await dailyLeads(rows, gone) : null;
   return rows.map((r) => {
     const lead = leads ? leads.get(r.key) : issueLead(r.content, shape, gone);
+    const edition = provisionalEdition(kind, r.content, r.window_end);
     const groups: Array<{ label: unknown; items?: Array<Record<string, any>> }> = kind === "daily"
       ? (r.content.sections ?? []).map((s: any) => ({ label: s.label, items: s.items }))
       : (r.content.themes ?? []).map((t: any) => ({ label: t.heading, items: t.storyRefs }));
     return {
       key: r.key,
       generatedAt: r.generated_at,
+      ...(edition ? { edition } : {}),
       headline: lead?.title ?? null,
       leadParagraph: kind === "daily" ? lead?.leadParagraph ?? null : periodOverview(r.content, kind, gone),
       sections: groups.map((g) => ({

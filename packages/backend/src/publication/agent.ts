@@ -5,6 +5,7 @@
 import { ACCESS, EDITION_WHEN, ITEM_COPY, POLICY, SITE, subjectAfter } from "@aihot/site";
 import { CATEGORIES } from "@aihot/industry/taxonomy";
 import { MCP_TOOL_NAMES as T } from "@aihot/contracts/mcp";
+import type { ReportDetail } from "@aihot/contracts/site";
 import { CATEGORY_LABELS, isCategoryKey, PUBLIC_API_CATEGORY_KEYS, toPublicApiCategory, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
 import { beijingDate, beijingTime, beijingWeekday } from "@aihot/contracts/time";
 import { serverModules } from "../modules.ts";
@@ -170,7 +171,7 @@ function noteLines(note: DailyNote | undefined): string[] {
   ];
 }
 
-export function dailyAnswer(r: DailyReport, via: Via, notes: Map<string, DailyNote> = new Map()): string {
+export function dailyAnswer(r: DailyReport, via: Via, notes: Map<string, DailyNote> = new Map(), edition?: ReportDetail["edition"]): string {
   const data: string[] = [];
   // The lead is the issue's first entry in its own words: name it, not its summary twice.
   const own = r.sections.some((s) => s.items.some((it) => it.title === r.lead?.title && it.summary === r.lead?.leadParagraph));
@@ -190,11 +191,15 @@ export function dailyAnswer(r: DailyReport, via: Via, notes: Map<string, DailyNo
   return answer([
     `# ${SITE.name} 日报 · ${r.date}（${beijingWeekday(r.date)}）`,
     "",
-    `收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态，${EDITION_WHEN.daily} 发布。日报页：${r.links.aihot}`,
+    edition
+      ? `提前版，收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态；正式窗口截止 ${stamp(edition.scheduledWindowEnd)} 后补齐。日报页：${r.links.aihot}`
+      : `收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态，${EDITION_WHEN.daily} 发布。日报页：${r.links.aihot}`,
     ...(data.length ? [] : ["这一期暂时没有可以展示的条目。"]),
   ], data.length ? data : null, [
     "先讲头条，再按栏目挑重点；用户要全文再全部列出。每条是一件事，「相关」是同一件事的其他进展或同一场发布的其他内容。",
-    `日报是${EDITION_WHEN.daily} 发布的固定成品，不等于“过去 24 小时”的滚动列表。`,
+    edition
+      ? `这是截至北京时间 ${stamp(r.windowEnd)} 的提前版，尚未覆盖完整正式窗口；不要称为全天或已定稿日报。`
+      : `日报是${EDITION_WHEN.daily} 发布的固定成品，不等于“过去 24 小时”的滚动列表。`,
     via === "http"
       ? `要其它日期的日报，请求 ${agentUrl("/daily/YYYY-MM-DD")}（真实日期）；没有就如实说，不要换一天冒充。`
       : "要其它日期的日报，传 date=YYYY-MM-DD（真实日期）；没有就如实说，不要换一天冒充。",
