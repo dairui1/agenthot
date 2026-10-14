@@ -52,7 +52,10 @@ test("an early daily records its actual cutoff and excludes unelapsed time; ordi
   const included = await item(at(-7 * 3600));
   await item(early());
   await item(at(-5 * 3600));
-  assert.equal((await composeDaily(DATE, undefined, { asOf: new Date() })).entries, 1);
+  const cutoff = new Date();
+  const composing = composeDaily(DATE, undefined, { asOf: cutoff });
+  cutoff.setTime(at().getTime());
+  assert.equal((await composing).entries, 1, "the validated cutoff is immutable during async composition");
   const saved = (await report())!;
   assert.deepEqual(ids(saved), [included]);
   assert.equal(saved.window_start.toISOString(), at(-24 * 3600).toISOString());

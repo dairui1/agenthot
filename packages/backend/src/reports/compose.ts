@@ -109,7 +109,7 @@ export async function composeDaily(date: string, reason?: string, options: { asO
   const scheduledEnd = beijingAt(date, EDITION_TIMES.daily);
   const start = new Date(scheduledEnd.getTime() - 86400000);
   const now = Date.now();
-  const end = options.asOf ?? scheduledEnd;
+  const end = options.asOf === undefined ? scheduledEnd : new Date(options.asOf.getTime());
   // An early issue covers only the already elapsed part of the currently open daily window.
   if (options.asOf !== undefined && (!Number.isFinite(end.getTime()) || end <= start || end >= scheduledEnd
     || end.getTime() > now || scheduledEnd.getTime() <= now)) throw new Error(`daily ${date}: invalid provisional cutoff`);
