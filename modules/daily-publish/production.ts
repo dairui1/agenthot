@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { beijingAt } from "@aihot/contracts/time";
+import { EDITION_TIMES } from "@aihot/site";
 import { sql } from "@aihot/backend/db";
 import { credential } from "@aihot/backend/config";
 import { invalidateModelCache, modelFor } from "@aihot/backend/editorial/models";
@@ -22,7 +24,8 @@ export async function snapshot(): Promise<Snapshot> {
     SELECT per_minute AS "perMinute", per_hour AS "perHour", per_day AS "perDay" FROM budgets WHERE service = 'codex-cli'`;
   const pending = await sql<PendingArticle[]>`SELECT a.id, a.source_id AS "sourceId", a.processing_state AS "processingState",
     a.grouping_status AS "groupingStatus", a.body_status AS "bodyStatus", a.backfill,
-    a.processing_retry_at::text AS "retryAt", a.discovered_at::text AS "discoveredAt", a.processing_attempt_tag AS "attemptTag",
+    a.processing_retry_at::text AS "retryAt", a.discovered_at::text AS "discoveredAt", a.timeline_at::text AS "timelineAt",
+    a.processing_attempt_tag AS "attemptTag",
     EXISTS (SELECT 1 FROM receipts r WHERE r.status IN ('pending', 'unknown') AND (
       r.id = a.grouping_receipt_id OR r.subject = 'article:' || a.id || '@' || a.revision::text
       OR (substring(r.subject from '^article:([^@:#]+)') = a.id AND r.subject NOT LIKE '%@%'
@@ -42,7 +45,7 @@ export async function snapshot(): Promise<Snapshot> {
     valves: Object.fromEntries(["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", ...DISABLED_VALVES].map(name => [name, process.env[name]])), models,
     adapterConfigured: !!credential("models", "CODEX_CLI_BASE_URL") && (credential("models", "CODEX_CLI_TOKEN")?.length ?? 0) >= 32,
     otherPaidProviders: !!(credential("models", "EMBEDDING_API_KEY") || credential("models", "DASHSCOPE_API_KEY") || credential("collectors", "JINA_API_KEY")),
-    due: { key, exists: !!report, entries: report?.entries ?? null } };
+    due: { key, windowEnd: beijingAt(key, EDITION_TIMES.daily).toISOString(), exists: !!report, entries: report?.entries ?? null } };
 }
 
 export const production: Dependencies = {

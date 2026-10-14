@@ -41,7 +41,7 @@ request was billed. Retain the corresponding receipts for investigation.
 - A run handles at most 24 live articles. Historical backfill is reported
   separately, not reprocessed or allowed to hold up current work. Deferred work,
   failed sources and unresolved live requests are reported as incomplete, not
-  silently converted into a successful issue. Existing published issues stay.
+  silently converted into a successful run. Existing published issues stay.
 - The one-shot container enables collection and model calls only for itself.
   The regular API, general worker and notification/IndexNow valves stay off.
   The temporary container has a read-only root, dropped capabilities and no
@@ -61,6 +61,13 @@ issue from material already eligible before the cutoff. Material first collected
 or made public after 08:00 belongs to the following issue, even if its source
 timestamp is older. The runner does not backdate discovery or change this rule.
 
+Unfinished articles whose recorded timeline is at or after the issue's cutoff
+belong to a later window and do not block the due issue. Earlier or unknown
+timelines, collection failures, configuration errors and grouping consistency
+errors still block composition. A run may therefore publish its due issue while
+reporting `incomplete` for later-window work; only a fully finished pipeline is
+`complete`. Check the report result and the remaining work separately.
+
 A source's first import is historical backfill and cannot manufacture today's
 news. When no material has been judged in the issue window, the native composer
 fails with `nothing judged in its window`. Report this as awaiting the first live
@@ -72,6 +79,15 @@ and exact issue date. Verify the real `/daily`, its dated issue and
 `/api/health` at `https://agenthot.dairui1.com`. Do not claim success from HTTP 200
 alone: a previous issue can still be serving. Check AgentLab sync independently;
 its healthy `/all` feed does not prove that the RSS/editorial pipeline finished.
+
+The heartbeat may make at most two additional serial runs only for native body
+extraction retries, within one 90-minute deadline including waits. Wait until all
+affected `processing_retry_at` values have passed, then run `--check` again. It
+must be ready, with no deferred work, failed articles or blocked receipts, and
+only the same articles ready for recovery. Do not reset attempts or receipts.
+Source, budget, model or grouping errors stop this recovery branch. Each run
+reads RSS again and can discover new material, so three runs need not empty the
+queue. Report any remainder; never add a fourth run to manufacture success.
 
 The heartbeat stays quiet when nothing meaningful changed. Notify on a verified
 new publication, a failure, or a required operator action. An unavailable Mac can

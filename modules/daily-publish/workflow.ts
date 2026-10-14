@@ -1,5 +1,5 @@
 // A bounded operator run. Database and external calls live in production.ts; this file makes
-// incomplete collection or processing explicit before an issue can be published.
+// incomplete work explicit without letting a later issue's intake block an already closed window.
 export const RUN_LIMIT = 24;
 export const REQUIRED_MODELS = ["prefilter", "score", "understand", "summarize", "structure", "group", "groupReview"] as const;
 export const DISABLED_VALVES = ["FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"] as const;
@@ -22,6 +22,7 @@ export interface PendingArticle {
   backfill: boolean;
   retryAt: string | null;
   discoveredAt: string;
+  timelineAt: string | null;
   blockedReceipt: boolean;
   attemptTag: string | null;
 }
@@ -36,7 +37,7 @@ export interface Snapshot {
   adapterConfigured: boolean;
   otherPaidProviders: boolean;
   pending: PendingArticle[];
-  due: { key: string; exists: boolean; entries: number | null };
+  due: { key: string; windowEnd: string; exists: boolean; entries: number | null };
 }
 
 export interface Collection {
@@ -88,9 +89,13 @@ export function runOnlyProblems(snapshot: Snapshot): string[] {
 
 export const runProblems = (snapshot: Snapshot): string[] => [...deploymentProblems(snapshot), ...runOnlyProblems(snapshot)];
 
-export function pendingSummary(snapshot: Snapshot) {
+function scopedPending(snapshot: Snapshot): PendingArticle[] {
   const sourceIds = new Set(allowedSources(snapshot).map(source => source.id));
-  const scoped = snapshot.pending.filter(article => sourceIds.has(article.sourceId));
+  return snapshot.pending.filter(article => sourceIds.has(article.sourceId));
+}
+
+export function pendingSummary(snapshot: Snapshot) {
+  const scoped = scopedPending(snapshot);
   const pending = scoped.filter(article => !article.backfill);
   const ready = pending.filter(article => (article.processingState === "new" && article.groupingStatus !== "failed"
     || article.processingState === "analyzed" && article.groupingStatus !== "complete")
@@ -127,79 +132,107 @@ export async function runDaily(deps: Dependencies): Promise<RunResult> {
   const initial = await deps.snapshot();
   const result: RunResult = { status: "blocked", problems: runProblems(initial), collected: [], processed: [], remaining: null, report: null };
   if (result.problems.length) return result;
+  const globalProblems: string[] = [];
+  const articleIssues = new Set<string>();
+  const globalProblem = (...problems: string[]) => { globalProblems.push(...problems); result.problems.push(...problems); };
+  const articleProblem = (id: string, problem: string) => { articleIssues.add(id); result.problems.push(problem); };
   for (const source of allowedSources(initial)) {
     try {
       const collected = await deps.collect(source.id);
       result.collected.push({ sourceId: collected.sourceId, status: collected.status,
         found: collected.found, created: collected.created, revised: collected.revised });
-      if (collected.status !== "ok") result.problems.push(`Collection ${collected.status}: ${source.id}`);
+      if (collected.status !== "ok") globalProblem(`Collection ${collected.status}: ${source.id}`);
     } catch {
-      result.problems.push(`Collection failed: ${source.id}`);
+      globalProblem(`Collection failed: ${source.id}`);
     }
   }
   const gathered = await deps.snapshot();
-  result.problems.push(...runProblems(gathered));
+  globalProblem(...runProblems(gathered));
   if (!runProblems(gathered).length) {
     for (const candidate of pendingSummary(gathered).candidates) {
       // Re-read before every article: a paused source, an administrator's model change, or a
       // failed/unknown receipt must stop new work rather than reuse the original snapshot.
       const current = await deps.snapshot();
       const problems = runProblems(current);
-      if (problems.length) { result.problems.push(...problems); break; }
+      if (problems.length) { globalProblem(...problems); break; }
       const article = pendingSummary(current).candidates.find(item => item.id === candidate.id);
       if (!article) continue;
       const processed: RunResult["processed"][number] = { id: article.id, state: "failed" };
       result.processed.push(processed);
+      let step: "extract" | "process" | "group" | "verify" = "process";
       try {
         if (article.processingState === "analyzed") processed.state = "group-only";
         else {
           if (article.bodyStatus === "pending") {
+            step = "extract";
             processed.extraction = await deps.extract(article.id);
             if (!["ok", "unconfirmed", "skipped"].includes(processed.extraction)) {
               processed.state = "extraction-incomplete";
-              result.problems.push(`Extraction ${processed.extraction}: ${article.id}`);
+              articleProblem(article.id, `Extraction ${processed.extraction}: ${article.id}`);
               continue;
             }
           }
+          step = "verify";
           const beforeProcess = await deps.snapshot();
           const stepProblems = runProblems(beforeProcess);
-          if (stepProblems.length) { result.problems.push(...stepProblems); break; }
+          if (stepProblems.length) { globalProblem(...stepProblems); break; }
           if (!pendingSummary(beforeProcess).candidates.some(item => item.id === article.id)) {
             processed.state = "deferred";
-            result.problems.push(`Article changed before processing: ${article.id}`);
+            globalProblem(`Article changed before processing: ${article.id}`);
             continue;
           }
+          step = "process";
           processed.state = (await deps.process(article.id, article.attemptTag ?? undefined)).state;
         }
         if (["pass", "group-only"].includes(processed.state)) {
+          step = "verify";
           const beforeGroup = await deps.snapshot();
           const stepProblems = runProblems(beforeGroup);
-          if (stepProblems.length) { result.problems.push(...stepProblems); break; }
+          if (stepProblems.length) { globalProblem(...stepProblems); break; }
           if (!pendingSummary(beforeGroup).candidates.some(item => item.id === article.id && item.processingState === "analyzed")) {
-            result.problems.push(`Article changed before grouping: ${article.id}`);
+            globalProblem(`Article changed before grouping: ${article.id}`);
             continue;
           }
+          step = "group";
           const grouped = await deps.group(article.id);
           processed.grouping = grouped.verdict;
-          if (grouped.consolidationError || grouped.reclaimError || grouped.rematchError) result.problems.push(`Grouping incomplete: ${article.id}`);
-        } else if (!["block", "unknown"].includes(processed.state)) result.problems.push(`Processing ${processed.state}: ${article.id}`);
+          if (grouped.consolidationError || grouped.reclaimError || grouped.rematchError) globalProblem(`Grouping incomplete: ${article.id}`);
+        } else if (!["block", "unknown"].includes(processed.state)) articleProblem(article.id, `Processing ${processed.state}: ${article.id}`);
       } catch {
-        result.problems.push(`Processing or grouping failed: ${article.id}`);
+        if (step === "verify") globalProblem(`Runtime verification failed: ${article.id}`);
+        else if (step === "group") globalProblem(`Grouping failed: ${article.id}`);
+        else articleProblem(article.id, `${step === "extract" ? "Extraction" : "Processing"} failed: ${article.id}`);
       }
     }
   }
   const final = await deps.snapshot();
-  result.problems.push(...runProblems(final));
+  globalProblem(...runProblems(final));
   result.remaining = pendingSummary(final);
   if (result.remaining.total) result.problems.push(`${result.remaining.total} articles remain unfinished`);
-  if (result.problems.length) { result.status = "incomplete"; return result; }
+  // Only a known timeline at/after the final cutoff proves this debt belongs to a later issue.
+  // Re-evaluate against the final due window because processing can cross the edition time.
+  const pending = new Map(scopedPending(final).filter(article => !article.backfill).map(article => [article.id, article]));
+  const groupingDebt = [...pending.values()].filter(article => article.groupingStatus === "failed"
+    || article.processingState === "analyzed" && article.groupingStatus !== "complete");
+  if (groupingDebt.length) globalProblem(`${groupingDebt.length} article grouping decisions remain unfinished`);
+  const end = Date.parse(final.due.windowEnd);
+  const blocksReport = (id: string) => {
+    const timeline = pending.get(id)?.timelineAt;
+    const at = timeline ? Date.parse(timeline) : NaN;
+    return !Number.isFinite(end) || !Number.isFinite(at) || at < end;
+  };
+  if (!Number.isFinite(end)) globalProblem("Daily window cutoff is invalid");
+  if (globalProblems.length || [...new Set([...pending.keys(), ...articleIssues])].some(blocksReport)) {
+    result.status = "incomplete";
+    return result;
+  }
   try {
     const report = await deps.compose(final.due.key);
     result.report = { ...report, existing: final.due.exists };
-    result.status = "complete";
+    result.status = result.problems.length ? "incomplete" : "complete";
   } catch (error) {
     if (error instanceof Error && error.message === `daily ${final.due.key}: nothing judged in its window`) {
-      result.status = "awaiting-first-live-issue";
+      result.status = result.problems.length ? "incomplete" : "awaiting-first-live-issue";
       result.problems.push("No judged live news in the due window; no quiet issue was fabricated");
     } else {
       result.status = "incomplete";

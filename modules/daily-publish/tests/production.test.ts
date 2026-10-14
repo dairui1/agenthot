@@ -4,6 +4,8 @@ import { after, beforeEach, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
 import { upsertMaterial } from "@aihot/backend/content/materials";
 import { releaseUnknownReceipt } from "@aihot/backend/providers/receipts";
+import { beijingAt } from "@aihot/contracts/time";
+import { EDITION_TIMES } from "@aihot/site";
 import { SOURCE_ALLOWLIST, snapshot } from "../production.ts";
 import { pendingSummary, REQUIRED_MODELS, type Dependencies } from "../workflow.ts";
 import { runRecorded } from "../execute.ts";
@@ -72,6 +74,16 @@ test("snapshot includes analyzed live items only when their passing analysis sti
   assert.equal(pendingSummary(await snapshot()).candidates[0].id, articleId);
   await sql`UPDATE articles SET grouping_status = 'complete' WHERE id = ${articleId}`;
   assert.equal(pendingSummary(await snapshot()).total, 0);
+});
+
+test("snapshot exposes the stored article timeline and the actual due edition cutoff", async () => {
+  const { articleId } = await material("timeline");
+  const timeline = "2026-10-14T00:00:00.000Z";
+  await sql`UPDATE articles SET timeline_at = ${timeline}::timestamptz WHERE id = ${articleId}`;
+  const state = await snapshot();
+  assert.equal(Date.parse(state.pending[0].timelineAt!), Date.parse(timeline));
+  assert.equal(state.due.windowEnd, beijingAt(state.due.key, EDITION_TIMES.daily).toISOString());
+  assert.ok(Date.parse(state.due.windowEnd) <= Date.parse(state.at));
 });
 
 test("run bookkeeping marks incomplete publication failed, and only a completed result is successful", async () => {
