@@ -39,5 +39,8 @@ test("ordinary finalized daily mastheads have no extra edition label", async () 
   delete report.edition;
   const response = await fetch(`${web.origin}/daily/${key}`);
   assert.equal(response.status, 200, web.logs());
-  assert.doesNotMatch(await response.text(), /提前版/);
+  const html = await response.text();
+  assert.doesNotMatch(html, /提前版/);
+  assert.match(html.replace(/<[^>]+>/g, ""), /每天 08:00 截稿/);
+  assert.doesNotMatch(html.replace(/<[^>]+>/g, ""), /每天 08:00 出刊/);
 });

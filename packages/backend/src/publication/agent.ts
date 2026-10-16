@@ -193,13 +193,13 @@ export function dailyAnswer(r: DailyReport, via: Via, notes: Map<string, DailyNo
     "",
     edition
       ? `提前版，收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态；正式窗口截止 ${stamp(edition.scheduledWindowEnd)} 后补齐。日报页：${r.links.aihot}`
-      : `收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态，${EDITION_WHEN.daily} 发布。日报页：${r.links.aihot}`,
+      : `收录北京时间 ${stamp(r.windowStart)} 至 ${stamp(r.windowEnd)} 的动态，${EDITION_WHEN.daily} 截稿，出刊后更新。日报页：${r.links.aihot}`,
     ...(data.length ? [] : ["这一期暂时没有可以展示的条目。"]),
   ], data.length ? data : null, [
     "先讲头条，再按栏目挑重点；用户要全文再全部列出。每条是一件事，「相关」是同一件事的其他进展或同一场发布的其他内容。",
     edition
       ? `这是截至北京时间 ${stamp(r.windowEnd)} 的提前版，尚未覆盖完整正式窗口；不要称为全天或已定稿日报。`
-      : `日报是${EDITION_WHEN.daily} 发布的固定成品，不等于“过去 24 小时”的滚动列表。`,
+      : `日报按${EDITION_WHEN.daily} 截稿，出刊后提供固定成品，不等于“过去 24 小时”的滚动列表。`,
     via === "http"
       ? `要其它日期的日报，请求 ${agentUrl("/daily/YYYY-MM-DD")}（真实日期）；没有就如实说，不要换一天冒充。`
       : "要其它日期的日报，传 date=YYYY-MM-DD（真实日期）；没有就如实说，不要换一天冒充。",

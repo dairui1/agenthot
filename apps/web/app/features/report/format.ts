@@ -115,7 +115,7 @@ export function dateMark(kind: ReportKind, key: string): { figure: string; top: 
 }
 
 /** When each kind comes out, for the masthead (the times are the site's, EDITION_WHEN). */
-export const EDITION: Record<ReportKind, string> = { daily: `${EDITION_WHEN.daily} 出刊`, weekly: "每周一出刊", monthly: "每月 1 日出刊" };
+export const EDITION: Record<ReportKind, string> = { daily: `${EDITION_WHEN.daily} 截稿`, weekly: "每周一出刊", monthly: "每月 1 日出刊" };
 
 /**
  * The masthead's figures, in the order a reader wants them, in the site's words (REPORTS). Releases of the
