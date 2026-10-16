@@ -14,7 +14,16 @@ AgentHot is an independent fork of [AIHOT](https://github.com/KKKKhazix/AIHOT), 
 
 The initial scope is Coding Agents, Agent Harnesses, browser/desktop agents (CUA), Agentic RL, context, tools, collaboration and security. General model/business news needs concrete Agent relevance. This is a reviewable starting configuration, not a user-calibrated editorial policy.
 
-The initial source list uses eight upstream public RSS examples. On 2026-10-07 all eight returned HTTP 200 with RSS/Atom root elements; this verifies reachability, not editorial quality or complete ingestion. Anthropic and smaller Agent projects are not comprehensively covered; paid X/WeChat collectors are not enabled.
+The source list retains the original eight public RSS feeds. On 2026-10-16 the
+owner approved ten additional official entries: Claude Code, Cursor Changelog,
+Codex, OpenAI Agents SDK for Python, LangChain Blog, LangGraph, Microsoft Agent
+Framework, browser-use, Playwright MCP and the MCP specification. Release feeds
+exclude prereleases and Playwright's temporary tags. Codex uses its latest stable
+release endpoint, which may miss intermediate stable releases between polls.
+RSS summaries are not relabelled as full bodies; official release bodies can be
+used internally, while public full-text redistribution remains disabled. Each
+new source's first import is bounded historical backfill. Paid X/WeChat collectors
+are not enabled. Reachability alone is not proof of editorial quality.
 
 ## AgentLab source
 
@@ -35,7 +44,7 @@ Omission alone never removes an article. Research articles are not imported unti
 they have a reliable first-publication date.
 
 The general worker and collection/model valves remain off in the long-running
-production services. A separate operator-Mac daily job can enable RSS collection
+production services. A separate operator-Mac daily job can enable RSS/JSON collection
 and local Codex analysis in a bounded, temporary production container; see
 [`deploy/agenthot-daily.md`](deploy/agenthot-daily.md). Notifications remain off.
 The AgentLab Compose service has no public port and carries no Codex/ChatGPT credentials.
@@ -98,13 +107,16 @@ than relying on a successful image build.
 
 The daily runner is site-specific code in `modules/daily-publish/` with a local
 transport at `scripts/agenthot-daily.py`. It reuses the upstream engine and public
-reading layer. The daily heartbeat starts at 10:00 UTC+8; the existing edition
-cutoff stays 08:00, so newly admitted material after that cutoff belongs to the
-next issue. No model credentials are installed on the server. Do not start the
-general worker or enable other paid collectors to compensate for a failed run.
-Run `--check` before `--run`, preserve budgets and unknown receipts, and verify the
-actual dated issue rather than the last good page. Historical first-import
-backfill does not qualify as today's news and is not a daily-processing backlog.
+reading layer. The daily heartbeat starts collection at 06:30 UTC+8 and
+publication at 08:30; the unchanged 08:00 cutoff bounds the preparation pass.
+These are task start times, not guaranteed completion times. Newly admitted
+material after the cutoff belongs to the next issue. No model credentials are
+installed on the server. Do not start the general worker or enable other paid
+collectors to compensate for a failed run. Run `--check` before `--collect` or
+`--publish`; scheduled collection must pass `--before` with the check's exact
+`collectionCutoff`. Preserve budgets and unknown receipts, and verify the actual
+dated issue rather than the last good page. Historical first-import backfill does
+not qualify as today's news and is not a daily-processing backlog.
 
 ## Upstream Maintenance
 

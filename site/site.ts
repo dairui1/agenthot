@@ -141,7 +141,7 @@ export const ABOUT = {
   sourcesFallback: "十几",
   /** 信源河动画下面的四个环节。 */
   steps: {
-    collect: "AgentLab 提供有来源证据的版本分析，现有公开 RSS 按日采集，尚未覆盖所有厂商与项目。",
+    collect: "AgentLab 提供有来源证据的版本分析，官方博客与 Agent 项目正式发布按日采集，尚未覆盖所有厂商与项目。",
     store: "抓到的都存下来，同一件事的报道归到一起，热点榜就是从这里算出来的。",
     select: `AgentLab 摘要保留原分析，不自动进入精选；其他内容由模型判断相关性与${ITEM_COPY.reasonLabel}，判断可能有误。`,
     publish: `日报${EDITION_WHEN.daily} 截稿，出刊后提供摘要与原文链接；周报和月报尚未开始定时发布。`,

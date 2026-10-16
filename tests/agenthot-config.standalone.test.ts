@@ -14,13 +14,13 @@ test("AgentHot identity is independent while preserving the upstream attribution
   assert.match(SITE.footerNote!, /AIHOT/);
 });
 
-test("candidate sources are public RSS with summary-only publication", () => {
+test("confirmed sources are public RSS or JSON with summary-only publication", () => {
   const { sources } = JSON.parse(read("industry/sources.json"));
-  assert.equal(sources.length, 8);
+  assert.equal(sources.length, 18);
   assert.equal(new Set(sources.map((s: { id: string }) => s.id)).size, sources.length);
   for (const s of sources) {
-    assert.equal(s.kind, "rss");
-    assert.equal(new URL(s.config.feedUrl).protocol, "https:");
+    assert.ok(["rss", "json_list"].includes(s.kind));
+    assert.equal(new URL(s.config.feedUrl ?? s.config.url).protocol, "https:");
     assert.equal(s.site_fulltext, false);
     assert.equal(s.syndicate_fulltext, false);
     if (s.owner_entity_id) assert.ok(ENTITIES[s.owner_entity_id]);

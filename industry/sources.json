@@ -1,5 +1,5 @@
 {
-  "$comment": "AgentHot 首版候选信源，仅公开 RSS；通过 Agent 相关性预筛。首次启动导入，后台维护后不会被此文件覆盖。来源许可默认仅摘要。",
+  "$comment": "AgentHot 已确认的公开官方 RSS 与 GitHub Release 信源；通过 Agent 相关性预筛。仅导入尚不存在的信源，后台维护后不会被此文件覆盖。来源许可默认仅摘要。",
   "sources": [
     {
       "id": "rss-openai-news",
@@ -164,6 +164,384 @@
       ],
       "site_fulltext": false,
       "syndicate_fulltext": false
+    },
+    {
+      "id": "json-github-claude-code",
+      "name": "Claude Code Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/anthropics/claude-code/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/anthropics/claude-code/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": "anthropic",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "rss-cursor-changelog",
+      "name": "Cursor Changelog",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://cursor.com/changelog/rss.xml",
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": "cursor",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-codex",
+      "name": "Codex Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/openai/codex/releases/latest",
+        "allowUrlPrefixes": [
+          "https://github.com/openai/codex/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        },
+        "singletonItem": true
+      },
+      "tier": "T1",
+      "owner_entity_id": "openai",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-openai-agents-python",
+      "name": "OpenAI Agents SDK Python",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/openai/openai-agents-python/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/openai/openai-agents-python/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": "openai",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "rss-langchain-blog",
+      "name": "LangChain Blog",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://www.langchain.com/blog/rss.xml",
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": null,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-langgraph",
+      "name": "LangGraph Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/langchain-ai/langgraph/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/langchain-ai/langgraph/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": null,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-agent-framework",
+      "name": "Microsoft Agent Framework Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/microsoft/agent-framework/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/microsoft/agent-framework/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": "microsoft",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-browser-use",
+      "name": "browser-use Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/browser-use/browser-use/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/browser-use/browser-use/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": null,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-playwright-mcp",
+      "name": "Playwright MCP Releases",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/microsoft/playwright-mcp/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/microsoft/playwright-mcp/releases/tag/"
+        ],
+        "denyUrlPrefixes": [
+          "https://github.com/microsoft/playwright-mcp/releases/tag/untagged-"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": "microsoft",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "json-github-mcp-spec",
+      "name": "Model Context Protocol Specification",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.github.com/repos/modelcontextprotocol/modelcontextprotocol/releases?per_page=30",
+        "allowUrlPrefixes": [
+          "https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/"
+        ],
+        "requireBoolean": {
+          "path": "prerelease",
+          "equals": false
+        },
+        "titlePaths": [
+          "name",
+          "tag_name"
+        ],
+        "urlTemplate": "{raw:html_url}",
+        "externalIdPath": "id",
+        "publishedAtPath": "published_at",
+        "summaryPaths": [
+          "body"
+        ],
+        "summaryIsBody": true,
+        "sortByPublishedAt": true,
+        "_aihot": {
+          "initialBackfillLimit": 8
+        }
+      },
+      "tier": "T1",
+      "owner_entity_id": null,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "Agent"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
     }
   ]
 }
