@@ -107,7 +107,10 @@ enough separate headroom for `npm ci` and the production frontend build.
 
 ## Acceptance
 
-AgentLab items enter `/all`, not the scored selection automatically. Imported
+AgentLab items enter `/all`, not the scored selection automatically. Complete,
+fresh live items can also enter the daily via the reviewed-source candidate
+contract described in [the module](../modules/agentlab/README.md), without rescoring.
+Imported
 importance is not an AgentHot score. The item page and its Markdown export name
 AgentLab separately from the underlying release, code and capture evidence.
 Only completed/reviewed analysis with fresh sources and a verified publication

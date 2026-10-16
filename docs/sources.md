@@ -116,6 +116,7 @@
 ```
 
 - 接口本身返回数组时，省略 `itemsPath`。`titlePaths`、`summaryPaths`、`authorPaths` 是候选路径数组，按顺序取第一个非空值，例如 `["title", "name"]`。
+- 接口返回单个条目对象时设 `singletonItem: true`，字段路径仍相对该对象；也可以用 `itemsPath` 先定位一个对象。它不能与 `itemsObjectValues` 同时开启，返回数组、空值或标量会报错。例如 GitHub `/repos/openai/codex/releases/latest` 只监测最新正式版，用 `published_at` 作为时间、`body` 作为正文，不会将密集的预发布版本当成正式版。这不是完整版本历史：两次采集之间发布多个正式版时可能只看到最后一个；需要完整历史时应使用列表接口及适当的采集频率。
 - 已有完整网址时用 `{raw:url}`；只有 slug 时可用 `https://example.com/posts/{slug}`。`{字段路径}` 会编码字段值，`{raw:字段路径}` 原样插入。JSON 列表不会自动把相对网址补成绝对网址，模板应产出完整的 HTTP(S) 地址。
 - `summaryIsBody`：确认接口里的摘要就是全文时设为 `true`，把 `summaryPaths` 取到的文字当正文，不再去抓原文页。
 - 日期建议返回带时区的 ISO 字符串；`2026-09-30 17:43:58` 这类不带时区的时间，与网页列表一样按 `publishedAtUtcOffset` 读（默认 `+08:00`）；数字时间戳分别设 `publishedAtUnit: "epoch_s"`（秒）或 `"epoch_ms"`（毫秒），`20261001` 这类日期设 `"yyyymmdd"`。

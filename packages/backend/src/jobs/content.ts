@@ -6,7 +6,7 @@
 // "failed", which the admin re-queues in bulk.
 import type { PgBoss } from "pg-boss";
 import { sql, type Db } from "../db.ts";
-import { extractArticleBody, pageFetchable } from "../content/extract.ts";
+import { BODY_FAILURE_REASONS, extractArticleBody, pageFetchable } from "../content/extract.ts";
 import { analyzeArticle, AnalysisInterruptedError } from "../editorial/analyze.ts";
 import { isHistorical } from "../content/materials.ts";
 import { publishArticle } from "../publication/publish.ts";
@@ -18,7 +18,7 @@ import { enqueue, QUEUES, shutdownSignal, work } from "./queue.ts";
 const RETRY_MINUTES = [5, 10, 20, 40, 60, 120, 240, 360];
 /** Unusable model output is retried less: each retry is a paid call. */
 const MAX_OUTPUT_FAILURES = 3;
-/** Extraction gives up after this many errors and the article is judged on what it has. */
+/** Extraction gives up after this many errors; body-less editorial pages then await source material. */
 const MAX_EXTRACT_FAILURES = 3;
 /** An article queued this long ago is queued again, in case its job was lost. */
 const QUEUED_STALE = "30 minutes";
@@ -100,8 +100,11 @@ export async function settleNonEditorial(articleId: string): Promise<{ group: bo
 }
 
 async function processingInput(articleId: string) {
-  const [row] = await sql<{ participation_mode: string; revision: number; backfill: boolean; published_at: Date | null; discovered_at: Date }[]>`
-    SELECT s.participation_mode, a.revision, a.backfill, a.published_at, a.discovered_at FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
+  const [row] = await sql<{ participation_mode: string; kind: string; revision: number; backfill: boolean; published_at: Date | null; discovered_at: Date;
+    url: string; body_status: string; has_body: boolean; has_post: boolean; processing_error: string | null }[]>`
+    SELECT s.participation_mode, s.kind, a.revision, a.backfill, a.published_at, a.discovered_at,
+      a.url, a.body_status, coalesce(a.body_text,'') <> '' AS has_body, a.x_post IS NOT NULL AS has_post, a.processing_error
+    FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
   return row ? { ...row, historical: isHistorical(row) } : null;
 }
 
@@ -126,6 +129,14 @@ async function processRevision(articleId: string, row: NonNullable<Awaited<Retur
     const { group } = await settleNonEditorial(articleId);
     if (group) await enqueue(QUEUES.group, { articleId, signalOnly: true }, { singletonKey: articleId, priority: PRIORITY.liveSignal });
     return { state: "skipped" };
+  }
+  if (row.body_status === "unconfirmed" && !row.has_body && !row.has_post && pageFetchable(row.url, row.kind)) {
+    const detail = /^(?:extract: Source body unavailable: |awaiting-source: )([a-z_]+)(?: \(HTTP [1-5]\d\d\))?$/.exec(row.processing_error ?? "")?.[1];
+    const reason = BODY_FAILURE_REASONS.find(value => value === detail) ?? "unconfirmed";
+    const stopped = await sql`UPDATE articles SET processing_state='failed', processing_error=${`awaiting-source: ${reason}`},
+      processing_retry_at=NULL, processing_queued_at=NULL
+      WHERE id=${articleId} AND revision=${row.revision} AND body_status='unconfirmed' AND coalesce(body_text,'')='' AND x_post IS NULL RETURNING id`;
+    return { state: stopped.length ? "awaiting-source" : "stale" };
   }
   try {
     const result = await analyzeArticle(articleId, { attemptTag: opts.attemptTag });
@@ -189,8 +200,8 @@ export async function registerContentJobs(boss: PgBoss) {
 }
 
 /**
- * Body extraction before analysis. Failures are retried a few times; after that the article is judged
- * on the excerpt it has ("unconfirmed" body, never a wrong one).
+ * Body extraction before analysis. Failures are retried a few times, then marked "unconfirmed";
+ * the analysis gate stops body-less editorial pages rather than treating missing evidence as a low score.
  */
 export async function processExtraction(articleId: string): Promise<{ state: string }> {
   const [input] = await sql<{ revision: number }[]>`SELECT revision FROM articles WHERE id = ${articleId}`;
@@ -245,7 +256,7 @@ export async function sweepUnprocessed(): Promise<{ enqueued: number }> {
 
 /**
  * The receipts of an article's analysis: an unknown outcome on any of them stops the article
- * ("failed"). Extraction never does: it retries, then judges the article on what it has.
+ * ("failed"). Extraction retries first; a body-less editorial page then stops awaiting source material.
  */
 const ARTICLE_STEPS = new Set(["prefilter_article", "score_article", "structure_article", "understand_article", "summarize_article"]);
 

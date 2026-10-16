@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { beijingAt } from "@aihot/contracts/time";
+import { addDays, beijingAt, beijingDate } from "@aihot/contracts/time";
 import { EDITION_TIMES } from "@aihot/site";
 import { sql } from "@aihot/backend/db";
 import { credential } from "@aihot/backend/config";
@@ -8,24 +8,33 @@ import { processArticle, processExtraction } from "@aihot/backend/jobs/content";
 import { groupArticle } from "@aihot/backend/events/group";
 import { collectSource } from "@aihot/backend/sources/collect";
 import { composeDaily, dueDaily } from "@aihot/backend/reports/compose";
-import { DISABLED_VALVES, REQUIRED_MODELS, type Dependencies, type PendingArticle, type Snapshot, type Source } from "./workflow.ts";
+import { DISABLED_VALVES, PREPARATION_WINDOW_MS, REQUIRED_MODELS, type Dependencies, type PendingArticle, type Snapshot, type Source } from "./workflow.ts";
 
 const sourceFile = JSON.parse(readFileSync(new URL("../../industry/sources.json", import.meta.url), "utf8")) as {
   sources: Array<{ id: string; kind: string; participation_mode: string }>;
 };
-export const SOURCE_ALLOWLIST = sourceFile.sources.filter(source => source.kind === "rss" && source.participation_mode === "editorial").map(source => source.id);
+export const SOURCE_ALLOWLIST = sourceFile.sources.filter(source => ["rss", "json_list"].includes(source.kind) && source.participation_mode === "editorial").map(source => source.id);
 
 export async function snapshot(): Promise<Snapshot> {
   const at = new Date();
   const key = dueDaily(at);
+  const windowEnd = beijingAt(key, EDITION_TIMES.daily);
   const sources = await sql<Source[]>`SELECT id, enabled, kind, participation_mode AS "participationMode", health,
-    last_ok_at::text AS "lastOkAt" FROM sources WHERE id = ANY(${SOURCE_ALLOWLIST}::text[]) ORDER BY id`;
+    last_ok_at::text AS "lastOkAt", created_at::text AS "createdAt" FROM sources WHERE id = ANY(${SOURCE_ALLOWLIST}::text[]) ORDER BY id`;
+  const [preparation] = await sql<Array<NonNullable<Snapshot["preparation"]>>>`SELECT status, started_at::text AS "startedAt",
+    coalesce(detail->'collectionVerified' = 'true'::jsonb, false) AS "collectionVerified",
+    finished_at::text AS "finishedAt", ARRAY(SELECT value->>'sourceId' FROM jsonb_array_elements(coalesce(detail->'collected', '[]'::jsonb))
+      WHERE value->>'status' = 'ok') AS "sourceIds" FROM job_runs WHERE job = 'agenthot.daily-collect'
+      AND started_at >= ${new Date(windowEnd.getTime() - PREPARATION_WINDOW_MS)} AND started_at < ${windowEnd}
+    ORDER BY started_at DESC, id DESC LIMIT 1`;
   const [budget] = await sql<Array<{ perMinute: number; perHour: number; perDay: number }>>`
     SELECT per_minute AS "perMinute", per_hour AS "perHour", per_day AS "perDay" FROM budgets WHERE service = 'codex-cli'`;
   const pending = await sql<PendingArticle[]>`SELECT a.id, a.source_id AS "sourceId", a.processing_state AS "processingState",
     a.grouping_status AS "groupingStatus", a.body_status AS "bodyStatus", a.backfill,
     a.processing_retry_at::text AS "retryAt", a.discovered_at::text AS "discoveredAt", a.timeline_at::text AS "timelineAt",
     a.processing_attempt_tag AS "attemptTag",
+    coalesce(a.processing_state = 'failed' AND a.body_status = 'unconfirmed' AND coalesce(a.body_text, '') = ''
+      AND a.x_post IS NULL AND a.processing_error LIKE 'awaiting-source:%', false) AS "awaitingSource",
     EXISTS (SELECT 1 FROM receipts r WHERE r.status IN ('pending', 'unknown') AND (
       r.id = a.grouping_receipt_id OR r.subject = 'article:' || a.id || '@' || a.revision::text
       OR (substring(r.subject from '^article:([^@:#]+)') = a.id AND r.subject NOT LIKE '%@%'
@@ -33,7 +42,7 @@ export async function snapshot(): Promise<Snapshot> {
           WHERE ar.article_id = a.id AND ar.revision = a.revision), a.created_at))
     )) AS "blockedReceipt"
     FROM articles a JOIN sources s ON s.id = a.source_id
-    WHERE a.source_id = ANY(${SOURCE_ALLOWLIST}::text[]) AND s.enabled AND s.kind = 'rss' AND s.participation_mode = 'editorial'
+    WHERE a.source_id = ANY(${SOURCE_ALLOWLIST}::text[]) AND s.enabled AND s.kind IN ('rss', 'json_list') AND s.participation_mode = 'editorial'
       AND (a.processing_state IN ('new', 'failed') OR (a.processing_state = 'analyzed' AND a.grouping_status <> 'complete'
         AND (SELECT relevance FROM analyses WHERE article_id = a.id ORDER BY input_revision DESC, id DESC LIMIT 1) = 'pass'))`;
   const [report] = await sql<Array<{ entries: number }>>`SELECT coalesce((content->'metrics'->>'totalEvents')::int, 0) AS entries
@@ -41,11 +50,14 @@ export async function snapshot(): Promise<Snapshot> {
   invalidateModelCache();
   const models: Record<string, string> = {};
   for (const step of REQUIRED_MODELS) models[step] = await modelFor(step);
-  return { at: at.toISOString(), allowlist: SOURCE_ALLOWLIST, sources, budget: budget ?? null, pending,
+  return { at: at.toISOString(), collectionCutoff: beijingAt(beijingDate(at), EDITION_TIMES.daily).toISOString(),
+    allowlist: SOURCE_ALLOWLIST, sources, budget: budget ?? null, pending,
     valves: Object.fromEntries(["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", ...DISABLED_VALVES].map(name => [name, process.env[name]])), models,
     adapterConfigured: !!credential("models", "CODEX_CLI_BASE_URL") && (credential("models", "CODEX_CLI_TOKEN")?.length ?? 0) >= 32,
     otherPaidProviders: !!(credential("models", "EMBEDDING_API_KEY") || credential("models", "DASHSCOPE_API_KEY") || credential("collectors", "JINA_API_KEY")),
-    due: { key, windowEnd: beijingAt(key, EDITION_TIMES.daily).toISOString(), exists: !!report, entries: report?.entries ?? null } };
+    preparation: preparation ?? null,
+    due: { key, windowStart: beijingAt(addDays(key, -1), EDITION_TIMES.daily).toISOString(),
+      windowEnd: windowEnd.toISOString(), exists: !!report, entries: report?.entries ?? null } };
 }
 
 export const production: Dependencies = {

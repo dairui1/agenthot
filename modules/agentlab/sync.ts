@@ -6,7 +6,7 @@ import { emit } from "@aihot/backend/modules";
 import { publishArticleTx } from "@aihot/backend/publication/publish";
 import { FEED_URL, parseSnapshot, SOURCE_ID, type AgentLabItem, type Snapshot } from "./contract.ts";
 
-type State = { external_id: string; article_id: string | null; upstream_revision: string; status: string; payload: AgentLabItem };
+type State = { external_id: string; article_id: string | null; upstream_revision: string; status: string; payload: AgentLabItem; daily_visible_at: Date | null };
 export type SyncResult = { status: "ok" | "skipped"; found: number; created: number; updated: number; suppressed: number; reason?: string };
 
 export async function ensureSource(): Promise<void> {
@@ -60,6 +60,12 @@ async function importSnapshot(tx: Tx, feed: Snapshot, first: boolean, now: Date)
     const reason = item.sourceFreshness !== "fresh" ? `source-${item.sourceFreshness}` : item.dateKind !== "published" ? "publication-date-unverified" : null;
     const status = reason ? "suppressed" : "active";
     if (before?.upstream_revision === item.revision && before.status === status) continue;
+    let previousAdmission: Date | null = null;
+    if (before?.article_id) {
+      await tx`SELECT id FROM articles WHERE id = ${before.article_id} FOR UPDATE`;
+      // Read after the lock: an editor may have withdrawn admission while this sync was waiting.
+      previousAdmission = (await tx<State[]>`SELECT daily_visible_at FROM agentlab_items WHERE article_id = ${before.article_id}`)[0]?.daily_visible_at ?? null;
+    }
     const material = await upsertMaterial({ sourceId: SOURCE_ID, identityKey: item.id, url: item.url, title: item.title,
       language: "zh", author: "AgentLab", publishedAt: item.dateKind === "published" ? new Date(item.publishedAt) : null,
       excerpt: item.summary, bodyText: item.contentText, bodyStatus: "ok", raw: { agentlab: item }, via: "agentlab", discoveredAt: now,
@@ -91,6 +97,12 @@ async function importSnapshot(tx: Tx, feed: Snapshot, first: boolean, now: Date)
       ON CONFLICT (external_id) DO UPDATE SET article_id = EXCLUDED.article_id, upstream_revision = EXCLUDED.upstream_revision,
         status = EXCLUDED.status, reason = EXCLUDED.reason, payload = EXCLUDED.payload, updated_at = now()`;
     await publish(tx, articleId);
+    // Revising material temporarily removes its old analysis inside this same transaction. Readers
+    // never saw that intermediate projection: a still-admitted correction keeps its original cutoff.
+    if (status === "active" && before?.status === "active" && previousAdmission) {
+      await tx`UPDATE agentlab_items SET daily_visible_at = ${previousAdmission}
+        WHERE article_id = ${articleId} AND daily_visible_at IS NOT NULL`;
+    }
     if (material.created) result.created += 1; else result.updated += 1;
     if (reason) result.suppressed += 1;
   }

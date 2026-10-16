@@ -1,6 +1,8 @@
 // A bounded operator run. Database and external calls live in production.ts; this file makes
 // incomplete work explicit without letting a later issue's intake block an already closed window.
 export const RUN_LIMIT = 24;
+export const PREPARATION_WINDOW_MS = 2 * 60 * 60 * 1000;
+export type Phase = "collect" | "publish";
 export const REQUIRED_MODELS = ["prefilter", "score", "understand", "summarize", "structure", "group", "groupReview"] as const;
 export const DISABLED_VALVES = ["FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"] as const;
 
@@ -11,6 +13,7 @@ export interface Source {
   participationMode: string;
   health: string;
   lastOkAt: string | null;
+  createdAt?: string;
 }
 
 export interface PendingArticle {
@@ -25,10 +28,12 @@ export interface PendingArticle {
   timelineAt: string | null;
   blockedReceipt: boolean;
   attemptTag: string | null;
+  awaitingSource?: boolean;
 }
 
 export interface Snapshot {
   at: string;
+  collectionCutoff: string;
   allowlist: string[];
   sources: Source[];
   budget: { perMinute: number; perHour: number; perDay: number } | null;
@@ -37,7 +42,8 @@ export interface Snapshot {
   adapterConfigured: boolean;
   otherPaidProviders: boolean;
   pending: PendingArticle[];
-  due: { key: string; windowEnd: string; exists: boolean; entries: number | null };
+  due: { key: string; windowStart: string; windowEnd: string; exists: boolean; entries: number | null };
+  preparation: { status: string; collectionVerified: boolean; startedAt: string; finishedAt: string | null; sourceIds: string[] } | null;
 }
 
 export interface Collection {
@@ -59,7 +65,7 @@ export interface Dependencies {
 
 export function allowedSources(snapshot: Snapshot): Source[] {
   const ids = new Set(snapshot.allowlist);
-  return snapshot.sources.filter(source => ids.has(source.id) && source.enabled && source.kind === "rss" && source.participationMode === "editorial");
+  return snapshot.sources.filter(source => ids.has(source.id) && source.enabled && ["rss", "json_list"].includes(source.kind) && source.participationMode === "editorial");
 }
 
 export function deploymentProblems(snapshot: Snapshot): string[] {
@@ -74,7 +80,7 @@ export function deploymentProblems(snapshot: Snapshot): string[] {
     if (snapshot.models[step] !== "gpt-6.1-sol") problems.push(`${step} must use gpt-6.1-sol`);
   }
   if (snapshot.otherPaidProviders) problems.push("Optional paid extraction or embedding providers must be absent");
-  if (!allowedSources(snapshot).length) problems.push("No enabled editorial RSS sources from the site allowlist");
+  if (!allowedSources(snapshot).length) problems.push("No enabled editorial sources from the site allowlist");
   return problems;
 }
 
@@ -88,6 +94,29 @@ export function runOnlyProblems(snapshot: Snapshot): string[] {
 }
 
 export const runProblems = (snapshot: Snapshot): string[] => [...deploymentProblems(snapshot), ...runOnlyProblems(snapshot)];
+
+export function publicationProblems(snapshot: Snapshot): string[] {
+  const problems: string[] = deploymentProblems(snapshot);
+  for (const key of ["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", ...DISABLED_VALVES]) {
+    if (snapshot.valves[key] !== "false") problems.push(`${key} must be false during publication`);
+  }
+  if (snapshot.adapterConfigured) problems.push("Publication must not have a model adapter");
+  const end = Date.parse(snapshot.due.windowEnd);
+  const preparation = snapshot.preparation;
+  const started = Date.parse(preparation?.startedAt ?? "");
+  const finished = Date.parse(preparation?.finishedAt ?? "");
+  if (!Number.isFinite(end) || end > Date.parse(snapshot.at)) problems.push("Daily window has not closed");
+  if (!preparation || !["ok", "failed"].includes(preparation.status) || !preparation.collectionVerified || !Number.isFinite(started) || !Number.isFinite(finished)
+    || started < end - PREPARATION_WINDOW_MS || started >= end || finished >= end || finished < started) {
+    problems.push("No completed collection pass before this issue's cutoff");
+  } else {
+    for (const source of allowedSources(snapshot)) {
+      if (source.createdAt && Date.parse(source.createdAt) >= end) continue;
+      if (!preparation.sourceIds.includes(source.id)) problems.push(`Source absent from pre-cutoff collection: ${source.id}`);
+    }
+  }
+  return problems;
+}
 
 function scopedPending(snapshot: Snapshot): PendingArticle[] {
   const sourceIds = new Set(allowedSources(snapshot).map(source => source.id));
@@ -106,6 +135,7 @@ export function pendingSummary(snapshot: Snapshot) {
     ready: ready.length,
     historicalPending: scoped.filter(article => article.backfill).length,
     failed: pending.filter(article => article.processingState === "failed" || article.groupingStatus === "failed").length,
+    awaitingSource: pending.filter(article => article.awaitingSource).length,
     blockedReceipts: pending.filter(article => article.blockedReceipt).length,
     deferred: pending.filter(article => article.processingState === "new" && article.retryAt && Date.parse(article.retryAt) > Date.parse(snapshot.at)).length,
     groupingPending: pending.filter(article => article.processingState === "analyzed").length,
@@ -115,11 +145,14 @@ export function pendingSummary(snapshot: Snapshot) {
 
 export function check(snapshot: Snapshot) {
   const problems = deploymentProblems(snapshot);
-  return { status: "check", at: snapshot.at, ready: problems.length === 0, problems, runWouldRequire: runOnlyProblems(snapshot),
+  return { status: "check", at: snapshot.at, collectionCutoff: snapshot.collectionCutoff, ready: problems.length === 0, problems, runWouldRequire: runOnlyProblems(snapshot),
+    publishWouldRequire: publicationProblems(snapshot), preparation: snapshot.preparation,
     sources: snapshot.sources, budget: snapshot.budget, models: snapshot.models, due: snapshot.due, pending: pendingSummary(snapshot), limit: RUN_LIMIT };
 }
 
 export interface RunResult {
+  phase: Phase;
+  collectionVerified: boolean;
   status: "complete" | "incomplete" | "blocked" | "awaiting-first-live-issue";
   problems: string[];
   collected: Collection[];
@@ -128,15 +161,14 @@ export interface RunResult {
   report: { key: string; entries: number; existing: boolean } | null;
 }
 
-export async function runDaily(deps: Dependencies): Promise<RunResult> {
+export async function runDaily(deps: Dependencies, phase: Phase): Promise<RunResult> {
   const initial = await deps.snapshot();
-  const result: RunResult = { status: "blocked", problems: runProblems(initial), collected: [], processed: [], remaining: null, report: null };
+  const verify = phase === "collect" ? runProblems : publicationProblems;
+  const result: RunResult = { phase, collectionVerified: false, status: "blocked", problems: verify(initial), collected: [], processed: [], remaining: null, report: null };
   if (result.problems.length) return result;
   const globalProblems: string[] = [];
-  const articleIssues = new Set<string>();
   const globalProblem = (...problems: string[]) => { globalProblems.push(...problems); result.problems.push(...problems); };
-  const articleProblem = (id: string, problem: string) => { articleIssues.add(id); result.problems.push(problem); };
-  for (const source of allowedSources(initial)) {
+  for (const source of phase === "collect" ? allowedSources(initial) : []) {
     try {
       const collected = await deps.collect(source.id);
       result.collected.push({ sourceId: collected.sourceId, status: collected.status,
@@ -147,8 +179,8 @@ export async function runDaily(deps: Dependencies): Promise<RunResult> {
     }
   }
   const gathered = await deps.snapshot();
-  globalProblem(...runProblems(gathered));
-  if (!runProblems(gathered).length) {
+  globalProblem(...verify(gathered));
+  if (phase === "collect" && !verify(gathered).length) {
     for (const candidate of pendingSummary(gathered).candidates) {
       // Re-read before every article: a paused source, an administrator's model change, or a
       // failed/unknown receipt must stop new work rather than reuse the original snapshot.
@@ -168,7 +200,7 @@ export async function runDaily(deps: Dependencies): Promise<RunResult> {
             processed.extraction = await deps.extract(article.id);
             if (!["ok", "unconfirmed", "skipped"].includes(processed.extraction)) {
               processed.state = "extraction-incomplete";
-              articleProblem(article.id, `Extraction ${processed.extraction}: ${article.id}`);
+              result.problems.push(`Extraction ${processed.extraction}: ${article.id}`);
               continue;
             }
           }
@@ -197,16 +229,16 @@ export async function runDaily(deps: Dependencies): Promise<RunResult> {
           const grouped = await deps.group(article.id);
           processed.grouping = grouped.verdict;
           if (grouped.consolidationError || grouped.reclaimError || grouped.rematchError) globalProblem(`Grouping incomplete: ${article.id}`);
-        } else if (!["block", "unknown"].includes(processed.state)) articleProblem(article.id, `Processing ${processed.state}: ${article.id}`);
+        } else if (!["block", "unknown"].includes(processed.state)) result.problems.push(`Processing ${processed.state}: ${article.id}`);
       } catch {
         if (step === "verify") globalProblem(`Runtime verification failed: ${article.id}`);
         else if (step === "group") globalProblem(`Grouping failed: ${article.id}`);
-        else articleProblem(article.id, `${step === "extract" ? "Extraction" : "Processing"} failed: ${article.id}`);
+        else result.problems.push(`${step === "extract" ? "Extraction" : "Processing"} failed: ${article.id}`);
       }
     }
   }
   const final = await deps.snapshot();
-  globalProblem(...runProblems(final));
+  globalProblem(...verify(final));
   result.remaining = pendingSummary(final);
   if (result.remaining.total) result.problems.push(`${result.remaining.total} articles remain unfinished`);
   // Only a known timeline at/after the final cutoff proves this debt belongs to a later issue.
@@ -215,14 +247,27 @@ export async function runDaily(deps: Dependencies): Promise<RunResult> {
   const groupingDebt = [...pending.values()].filter(article => article.groupingStatus === "failed"
     || article.processingState === "analyzed" && article.groupingStatus !== "complete");
   if (groupingDebt.length) globalProblem(`${groupingDebt.length} article grouping decisions remain unfinished`);
+  if (phase === "collect") {
+    result.collectionVerified = !globalProblems.length
+      && allowedSources(final).every(source => result.collected.some(row => row.sourceId === source.id && row.status === "ok"))
+      && result.processed.every(row => ["pass", "block", "unknown", "group-only", "awaiting-source"].includes(row.state)
+        || row.state === "extraction-incomplete" && row.extraction === "retrying");
+    result.status = result.problems.length ? "incomplete" : "complete";
+    return result;
+  }
+  const start = Date.parse(final.due.windowStart);
   const end = Date.parse(final.due.windowEnd);
   const blocksReport = (id: string) => {
-    const timeline = pending.get(id)?.timelineAt;
+    const article = pending.get(id);
+    // Material with a confirmed unavailable body is parked, not judged as low-value news. Keep
+    // its failure visible, but do not hold every other source or every future issue hostage.
+    if (article?.awaitingSource && !article.blockedReceipt) return false;
+    const timeline = article?.timelineAt;
     const at = timeline ? Date.parse(timeline) : NaN;
-    return !Number.isFinite(end) || !Number.isFinite(at) || at < end;
+    return !Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(at) || at >= start && at < end;
   };
-  if (!Number.isFinite(end)) globalProblem("Daily window cutoff is invalid");
-  if (globalProblems.length || [...new Set([...pending.keys(), ...articleIssues])].some(blocksReport)) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) globalProblem("Daily window cutoff is invalid");
+  if (globalProblems.length || [...pending.keys()].some(blocksReport)) {
     result.status = "incomplete";
     return result;
   }

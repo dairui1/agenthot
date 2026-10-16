@@ -2,7 +2,7 @@
 
 面向 Agent 开发者与重度用户的动态站。基于 [AIHOT](https://github.com/KKKKhazix/AIHOT) 独立 fork，保留采集、精选、事件归组、热点、日报、管理后台及原有页面，不重写引擎。
 
-公开试运行地址：[agenthot.dairui1.com](https://agenthot.dairui1.com)。AgentLab 动态独立同步；每日采集与模型筛选使用本机登录态 Codex CLI，模型为 `gpt-6.1-sol`，通过有界的一次性任务发布，见 [每日发布](deploy/agenthot-daily.md)。通知与服务器常驻通用 worker 保持关闭，不包含密钥和运行数据。适配器限制见 [Codex 适配器](modules/codex-cli/README.md)，生产环境不保存 Codex 登录态，部署流程见 [AgentHot 部署](deploy/agenthot.md)。
+公开试运行地址：[agenthot.dairui1.com](https://agenthot.dairui1.com)。AgentLab 动态独立同步，符合证据条件的内容也进入日报；每天 UTC+8 06:30 采集处理、08:00 截稿、08:30 出刊。采集与模型筛选使用本机登录态 Codex CLI，模型为 `gpt-6.1-sol`；出刊阶段不采集、不调用模型。两阶段均为有界的一次性任务，见 [每日发布](deploy/agenthot-daily.md)。通知与服务器常驻通用 worker 保持关闭，不包含密钥和运行数据。适配器限制见 [Codex 适配器](modules/codex-cli/README.md)，生产环境不保存 Codex 登录态，部署流程见 [AgentHot 部署](deploy/agenthot.md)。
 
 ## 定制范围
 

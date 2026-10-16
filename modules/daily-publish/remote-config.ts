@@ -8,7 +8,7 @@ const MODEL_ENVS = [
 
 /** The token travels over SSH stdin, never in a command line or a server-side file. */
 export function remoteEnvironment(input: unknown, mode: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (mode !== "--run" && mode !== "--check") throw new Error("Expected --run or --check");
+  if (!["--collect", "--publish", "--check"].includes(mode)) throw new Error("Expected --collect, --publish or --check");
   if (!input || typeof input !== "object") throw new Error("Invalid remote configuration");
   const config = input as Record<string, unknown>;
   if (typeof config.expectedRelease !== "string" || !/^[a-f0-9]{40}$/.test(config.expectedRelease)
@@ -22,14 +22,14 @@ export function remoteEnvironment(input: unknown, mode: string, env: NodeJS.Proc
     AIHOT_DATA_DIR: "/data",
     NODE_ENV: "production",
     AIHOT_ENVIRONMENT: "production",
-    COLLECT_ENABLED: mode === "--run" ? "true" : "false",
-    MODEL_CALLS_ENABLED: mode === "--run" ? "true" : "false",
+    COLLECT_ENABLED: mode === "--collect" ? "true" : "false",
+    MODEL_CALLS_ENABLED: mode === "--collect" ? "true" : "false",
     FEISHU_CONTENT_PUSH_ENABLED: "false",
     FEISHU_INTERNAL_ENABLED: "false",
     INDEXNOW_SUBMIT_ENABLED: "false",
   };
   for (const key of MODEL_ENVS) result[key] = "gpt-6.1-sol";
-  if (mode === "--run") {
+  if (mode === "--collect") {
     if (typeof config.token !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(config.token)
       || config.baseUrl !== "http://127.0.0.1:14312/v1") throw new Error("Invalid loopback adapter configuration");
     result.CODEX_CLI_TOKEN = config.token;

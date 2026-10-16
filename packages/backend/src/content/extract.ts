@@ -3,6 +3,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { sql } from "../db.ts";
+import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
 import { stripTags } from "../lib/text.ts";
 import { isVideoPageUrl } from "../lib/video-url.ts";
@@ -26,6 +27,18 @@ export interface ExtractedBody {
 }
 
 const MIN_BODY_CHARS = 200;
+
+export const BODY_FAILURE_REASONS = ["access_challenge", "access_denied", "http_error", "not_html", "empty_body", "timeout", "fetch_failed", "unsafe_url"] as const;
+export type BodyFailureReason = typeof BODY_FAILURE_REASONS[number];
+
+/** Safe diagnostics: never persist a challenged page, a credential-bearing URL, or a provider error. */
+export class SourceBodyUnavailableError extends Error {
+  readonly reason: BodyFailureReason;
+  constructor(reason: BodyFailureReason, status?: number) {
+    super(`Source body unavailable: ${reason}${status === undefined ? "" : ` (HTTP ${status})`}`);
+    this.reason = reason;
+  }
+}
 
 /**
  * Readability leaves out what an inline style hides, but compares style.display and style.visibility
@@ -81,17 +94,26 @@ export function readable(html: string, url: string, utcOffset?: string): Extract
 
 export async function extractFromUrl(url: string, subject: string, utcOffset?: string): Promise<ExtractedBody | null> {
   if (isVideoPageUrl(url)) return null;
+  let failure: SourceBodyUnavailableError;
   try {
     const res = await guardedFetch(url, { timeoutMs: 20_000, maxBytes: 6 * 1024 * 1024 });
     if (isVideoPageUrl(res.url)) return null;
+    if (res.headers.get("cf-mitigated") === "challenge") throw new SourceBodyUnavailableError("access_challenge", res.status);
+    if (res.status === 401 || res.status === 403) throw new SourceBodyUnavailableError("access_denied", res.status);
+    if (res.status !== 200) throw new SourceBodyUnavailableError("http_error", res.status);
     const type = res.headers.get("content-type") ?? "";
-    if (res.status === 200 && /html/.test(type)) {
-      const got = readable(res.text(), res.url, utcOffset);
-      if (got) return got;
-    }
-  } catch {
-    // fall through to Jina
+    if (!/html/.test(type)) throw new SourceBodyUnavailableError("not_html");
+    const got = readable(res.text(), res.url, utcOffset);
+    if (got) return got;
+    failure = new SourceBodyUnavailableError("empty_body");
+  } catch (error) {
+    failure = error instanceof SourceBodyUnavailableError ? error : new SourceBodyUnavailableError(
+      error instanceof Error && (error.message.startsWith("Blocked") || (error.cause as { code?: string })?.code === "EBLOCKED") ? "unsafe_url"
+        : error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "fetch_failed");
   }
+  // A denied source is not a browser-rendering problem. Never route its challenge through another
+  // fetcher; a missing optional provider must also not replace the real public-fetch diagnosis.
+  if (["access_challenge", "access_denied", "unsafe_url"].includes(failure.reason) || !credential("collectors", "JINA_API_KEY")) throw failure;
   try {
     const page = await jinaRead(url, { purpose: "body_fallback", subject });
     const html = markdownBody(page.markdown, url);

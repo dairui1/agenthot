@@ -201,6 +201,21 @@ export interface ServerModule {
   itemProvenance?: (articleId: string, db: Db) => Promise<ItemProvenance | null>;
   /** Source retractions restrict every projection without rewriting an editor's independent overrides. */
   publicationRestriction?: (articleId: string, db: Db) => Promise<"withdrawn" | null>;
+  /** After publication projection, in its transaction and after release locks (publication/publish.ts). */
+  publicationProjected?: (publication: { articleId: string; sourceId: string; at: Date }, db: Db) => Promise<void>;
+  /**
+   * Independently reviewed editorial material for a daily (reports/edition.ts), without changing its
+   * score or selected status. The engine rechecks publication visibility, backfill and [start, end),
+   * then applies the same fact/event deduplication and arrangement as ordinary candidates.
+   */
+  dailyReportCandidates?: (window: { start: Date; end: Date }, db: Db) => Promise<Array<{
+    articleId: string;
+    releasedAt: Date;
+    /** A per-project allocation bucket, not a replacement source identity. Namespaced by the engine. */
+    arrangementKey?: string;
+    /** Verified URLs of this exact release/fact, never a repository or publication's home page. */
+    equivalentUrls?: string[];
+  }>>;
   /** Its HTTP routes, and hooks on the app such as what to flush when it closes, registered before the engine's v1 fallbacks (apps/api/src/app.ts). */
   http?: (app: FastifyInstance) => void;
   agent?: {

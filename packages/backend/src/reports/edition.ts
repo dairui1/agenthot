@@ -9,6 +9,8 @@
 import { addDays } from "@aihot/contracts/time";
 import { CATEGORIES } from "@aihot/industry/taxonomy";
 import { sql } from "../db.ts";
+import { serverModules } from "../modules.ts";
+import { identityKeyForUrl } from "../lib/url.ts";
 import { currentSignals } from "../events/hot.ts";
 import { pickRepresentative, representativePriority, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "../publication/representative.ts";
 import { factSources } from "../publication/coverage.ts";
@@ -58,6 +60,8 @@ export type RelatedReport = Pick<ReportEntry, "itemId" | "factId" | "storyPublic
 
 /** One event of a daily as stored. */
 export interface DailyEntry extends ReportEntry {
+  /** Frozen exact-release identities used only for cross-source repetition checks. */
+  identityKeys?: string[];
   /** Sources that reported the event by the cutoff, this one included. */
   sources: number;
   related?: RelatedReport[];
@@ -69,6 +73,7 @@ export interface DailyEntry extends ReportEntry {
 
 /** An entry while its issue is edited: what ranking and the editors need besides what is stored. */
 export interface EditionEntry {
+  arrangementKey?: string;
   entry: DailyEntry;
   category: string | null;
   tags: string[];
@@ -84,6 +89,8 @@ export interface EditionEntry {
 }
 
 type ReportRow = RepresentativeIdentity & {
+  arrangementKey?: string;
+  equivalentUrls?: string[];
   id: string; title: string; summary: string | null; url: string; category: string | null; tags: string[]; score: number | null;
   first_party: boolean; body_mode: "full" | "summary"; timeline_at: Date;
   source_id: string; source_name: string; source_kind: string;
@@ -101,11 +108,15 @@ const REPORT_FIELDS = sql`p.article_id AS id, p.title, p.summary, p.url, p.categ
  * was released only within it is old news there.
  */
 export async function periodReports(start: Date, end: Date): Promise<ReportRow[]> {
+  return (await reportCandidates(start, end, false)).selected;
+}
+
+async function reportCandidates(start: Date, end: Date, includeModules: boolean): Promise<{ selected: ReportRow[]; supplied: ReportRow[] }> {
   return sql.begin("isolation level read committed", async (tx) => {
     // Wait for in-flight releases and keep later ones outside this snapshot. The following SELECT
     // gets a fresh READ COMMITTED snapshot; model calls and report writes happen after the lock ends.
     await tx`SELECT pg_advisory_xact_lock(hashtext('report_candidates'))`;
-    return tx<ReportRow[]>`
+    const selected = await tx<ReportRow[]>`
       SELECT ${REPORT_FIELDS}
       FROM publications p JOIN sources s ON s.id = p.source_id
       LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
@@ -117,6 +128,38 @@ export async function periodReports(start: Date, end: Date): Promise<ReportRow[]
           OR (p.visible_after > p.timeline_at AND p.visible_after >= ${start} AND p.visible_after < ${end})
         )
         AND p.timeline_at >= ${start}::timestamptz - interval '24 hours'`;
+    const proposals = new Map<string, { releasedAt: Date; arrangementKey?: string; equivalentUrls?: string[] }>();
+    if (includeModules) for (const module of serverModules()) {
+      for (const candidate of await module.dailyReportCandidates?.({ start, end }, tx) ?? []) {
+        if (!Number.isFinite(candidate.releasedAt.getTime())) continue;
+        const previous = proposals.get(candidate.articleId);
+        // If modules disagree, only the latest confirmed admission may establish a window.
+        if (!previous || candidate.releasedAt > previous.releasedAt) proposals.set(candidate.articleId, {
+          releasedAt: candidate.releasedAt,
+          arrangementKey: candidate.arrangementKey ? `module:${module.name}:${candidate.arrangementKey}` : undefined,
+          equivalentUrls: candidate.equivalentUrls,
+        });
+      }
+    }
+    if (!proposals.size) return { selected, supplied: [] };
+    const supplied = await tx<ReportRow[]>`
+      SELECT ${REPORT_FIELDS}
+      FROM publications p JOIN sources s ON s.id = p.source_id JOIN articles a ON a.id = p.article_id
+      JOIN jsonb_to_recordset(${tx.json([...proposals].map(([article_id, candidate]) => ({ article_id, released_at: candidate.releasedAt.toISOString() })))})
+        AS nomination(article_id text, released_at timestamptz) ON nomination.article_id = p.article_id
+      LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
+      LEFT JOIN stories st ON st.id = f.story_id
+      WHERE ${listedCondition(end)} AND NOT p.backfill AND s.participation_mode = 'editorial'
+        AND a.grouping_status = 'complete' AND a.selection_adds_value IS DISTINCT FROM false
+        AND p.timeline_at >= ${start}::timestamptz - interval '24 hours'
+        AND greatest(p.timeline_at, nomination.released_at, p.visible_after) >= ${start}
+        AND greatest(p.timeline_at, nomination.released_at, p.visible_after) < ${end}`;
+    const selectedIds = new Set(selected.map(row => row.id));
+    for (const row of [...selected, ...supplied]) {
+      const proposal = proposals.get(row.id);
+      if (proposal) { row.arrangementKey = proposal.arrangementKey; row.equivalentUrls = proposal.equivalentUrls; }
+    }
+    return { selected, supplied: supplied.filter(row => !selectedIds.has(row.id)) };
   });
 }
 
@@ -140,10 +183,36 @@ const asRelated = (e: ReportEntry): RelatedReport => ({
 });
 
 const factKeyOf = (r: ReportRow) => r.fact_public_id ?? `a:${r.id}`;
+const urlIdentity = (url: string) => identityKeyForUrl(url, { keepFragment: true });
+const equivalentIdentities = (r: ReportRow) => (r.equivalentUrls ?? []).map(urlIdentity).filter((key): key is string => key !== null);
+const reportIdentities = (r: ReportRow) => [factKeyOf(r), `a:${r.id}`, ...equivalentIdentities(r)];
 
-function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
-  const out = new Map<string, T[]>();
-  for (const row of rows) out.set(key(row), [...(out.get(key(row)) ?? []), row]);
+/** Union only shared facts or exact URLs, including a module's verified release evidence. */
+function equivalentReports(rows: ReportRow[]): ReportRow[][] {
+  const declared = new Set(rows.flatMap(equivalentIdentities));
+  const parents = rows.map((_, i) => i);
+  const root = (i: number): number => parents[i] === i ? i : (parents[i] = root(parents[i]!));
+  const seen = new Map<string, number>();
+  for (const [i, row] of rows.entries()) {
+    const ownUrl = urlIdentity(row.url);
+    // A shared overview URL alone is not a shared fact. Only an explicit release equivalence
+    // lets an ordinary candidate's URL join the module's independently reviewed report.
+    const keys = [...reportIdentities(row), ...(ownUrl && declared.has(ownUrl) ? [ownUrl] : [])];
+    for (const key of keys) {
+      const previous = seen.get(key);
+      if (previous === undefined) seen.set(key, i);
+      else parents[root(i)] = root(previous);
+    }
+  }
+  return [...groupBy(rows, (_row, i) => root(i)).values()];
+}
+
+function groupBy<T, K>(rows: T[], key: (row: T, index: number) => K): Map<K, T[]> {
+  const out = new Map<K, T[]>();
+  for (const [index, row] of rows.entries()) {
+    const k = key(row, index);
+    out.set(k, [...(out.get(k) ?? []), row]);
+  }
   return out;
 }
 
@@ -216,6 +285,11 @@ export async function dailyMemory(date: string): Promise<{ keys: Set<string>; st
   for (const issue of issues) {
     for (const it of citedIn(issue.content)) {
       if (it.factId) keys.add(String(it.factId));
+      if (typeof it.sourceUrl === "string") {
+        const identity = urlIdentity(it.sourceUrl);
+        if (identity) keys.add(`reported:${identity}`);
+      }
+      for (const identity of Array.isArray(it.identityKeys) ? it.identityKeys : []) if (typeof identity === "string") keys.add(identity);
       if (!it.itemId) continue;
       keys.add(`a:${it.itemId}`);
       if (!cited.has(it.itemId)) cited.set(it.itemId, { key: issue.key, title: String(it.title ?? "") });
@@ -290,19 +364,27 @@ function importance(e: { score: number | null; participants: number; official: b
   return (e.score ?? 50) + 5 * Math.log2(1 + e.participants) + (e.official ? 5 : 0) - (e.followUp ? 6 : 0);
 }
 
-interface Fact { key: string; rows: ReportRow[]; selected: boolean; sources: string[]; at: number }
+interface Fact { key: string; rows: ReportRow[]; admitted: boolean; sources: string[]; at: number }
 
 /**
  * The daily's events for the window [start, end), most important first, before the editors' pass:
  * selected reports and missed facts, minus what the week's issues already carried, one entry per event.
  */
 export async function dailyEdition(date: string, start: Date, end: Date): Promise<{ entries: EditionEntry[]; stats: Record<string, number> }> {
-  const [memory, selected, missed, judged] = await Promise.all([dailyMemory(date), periodReports(start, end), missedFacts(start, end), judgedReports(start, end)]);
-  const raw = [
-    ...[...groupBy(selected, factKeyOf)].map(([key, rows]) => ({ key, rows, selected: true })),
-    ...missed.map((m) => ({ ...m, selected: false })),
-  ];
-  const kept = raw.filter((f) => !memory.keys.has(f.key) && !f.rows.some((r) => memory.keys.has(`a:${r.id}`)));
+  const [memory, { selected, supplied }, missed, judged] = await Promise.all([dailyMemory(date), reportCandidates(start, end, true), missedFacts(start, end), judgedReports(start, end)]);
+  const admitted = [...selected, ...supplied];
+  const admittedIds = new Set(admitted.map(row => row.id));
+  const unique = new Map([...missed.flatMap(f => f.rows), ...admitted].map(row => [row.id, row]));
+  const raw = equivalentReports([...unique.values()]).map(rows => {
+    rows.sort((a, b) => Number(a.fact_id === null) - Number(b.fact_id === null));
+    return { key: factKeyOf(rows[0]!), rows, admitted: rows.some(row => admittedIds.has(row.id)) };
+  });
+  const kept = raw.filter(f => !f.rows.some(row => {
+    const ownUrl = urlIdentity(row.url);
+    return reportIdentities(row).some(key => memory.keys.has(key))
+      || equivalentIdentities(row).some(key => memory.keys.has(`reported:${key}`))
+      || (ownUrl !== null && memory.keys.has(ownUrl));
+  }));
   const factIds = [...new Set(kept.map((f) => f.rows[0]!.fact_id).filter((id): id is number => id !== null))];
   const sourcesOf = await factSources(factIds, end);
   const facts: Fact[] = kept.map((f) => {
@@ -342,17 +424,18 @@ export async function dailyEdition(date: string, start: Date, end: Date): Promis
     const sourceIds = new Set(fs.flatMap((f) => f.sources));
     const storyId = rep.story_id;
     const previous = storyId === null ? null : memory.stories.get(storyId) ?? null;
-    const score = Math.max(rep.score ?? 0, ...fs.filter((f) => f.selected).flatMap((f) => f.rows.map((r) => r.score ?? 0)));
+    const score = Math.max(rep.score ?? 0, ...fs.filter((f) => f.admitted).flatMap((f) => f.rows.map((r) => r.score ?? 0)));
     const entry: DailyEntry = {
       ...reportEntry(rep),
+      identityKeys: [...new Set(fs.flatMap(f => f.rows.flatMap(reportIdentities)))],
       sources: sourceIds.size,
       ...(reps.length > 1 ? { related: reps.slice(1).map((r) => asRelated(reportEntry(r))) } : {}),
       ...(previous ? { followUp: previous.key } : {}),
-      ...(fs.every((f) => !f.selected) ? { fillIn: true as const } : {}),
+      ...(fs.every((f) => !f.admitted) ? { fillIn: true as const } : {}),
     };
     const ids = new Set(fs.flatMap((f) => f.rows.map((r) => r.id)));
     return {
-      entry, category: rep.category, tags: rep.tags, storyId, sourceIds, authority: representativePriority(rep), previous,
+      entry, arrangementKey: rep.arrangementKey, category: rep.category, tags: rep.tags, storyId, sourceIds, authority: representativePriority(rep), previous,
       mentions: new Set(storyId === null ? named.filter((n) => ids.has(n.article_id)).map((n) => n.story_id) : []),
       importance: importance({
         score,
@@ -365,7 +448,7 @@ export async function dailyEdition(date: string, start: Date, end: Date): Promis
   entries.sort((a, b) => b.importance - a.importance || a.entry.itemId.localeCompare(b.entry.itemId));
   return {
     entries,
-    stats: { judgedReports: judged, selectedReports: selected.length, facts: raw.length, repeatsSuppressed: raw.length - kept.length, fillIns: kept.filter((f) => !f.selected).length, events: entries.length },
+    stats: { judgedReports: judged, selectedReports: selected.length, suppliedReports: supplied.length, facts: raw.length, repeatsSuppressed: raw.length - kept.length, fillIns: kept.filter((f) => !f.admitted).length, events: entries.length },
   };
 }
 
@@ -400,10 +483,11 @@ export function arrangeDaily(entries: EditionEntry[]): { main: EditionEntry[]; f
   const rest: EditionEntry[] = [];
   const perSource = new Map<string, number>();
   for (const e of live) {
-    const n = perSource.get(e.entry.sourceId) ?? 0;
+    const bucket = e.arrangementKey ?? `source:${e.entry.sourceId}`;
+    const n = perSource.get(bucket) ?? 0;
     if (main.length < MAIN_ENTRIES && n < PER_SOURCE && full(e)) {
       main.push(e);
-      perSource.set(e.entry.sourceId, n + 1);
+      perSource.set(bucket, n + 1);
     } else rest.push(e);
   }
   const flashes = rest.slice(0, FLASH_ENTRIES);

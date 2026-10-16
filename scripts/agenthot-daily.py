@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+from datetime import datetime
 import fcntl
 import json
 import os
@@ -77,7 +78,7 @@ def operation_lock():
 def remaining(deadline):
     seconds = deadline - time.monotonic()
     if seconds <= 0:
-        raise TransportError("Daily publisher exceeded its 90-minute deadline")
+        raise TransportError("Daily publisher reached its run deadline")
     return seconds
 
 
@@ -193,14 +194,29 @@ timeout --signal=TERM --kill-after=10s {max(1, int(seconds) - 20)}s docker run -
 """
 
 
-def run(mode):
-    deadline = time.monotonic() + MAX_SECONDS
+def run(mode, before=None):
+    started = time.monotonic()
+    seconds = MAX_SECONDS
+    if before is not None:
+        if mode != "collect":
+            raise TransportError("--before is only valid with --collect")
+        try:
+            cutoff = datetime.fromisoformat(before[:-1] + "+00:00" if before.endswith("Z") else before)
+            if cutoff.utcoffset() is None:
+                raise ValueError("timezone required")
+        except (ValueError, TypeError, AttributeError) as error:
+            raise TransportError("--before requires a timezone-qualified ISO timestamp") from error
+        seconds = min(seconds, cutoff.timestamp() - time.time())
+        if seconds <= 0:
+            raise TransportError("Collection cutoff has already passed")
+    deadline = started + seconds
     adapter = tunnel = None
     with operation_lock():
         release = local_release()
         payload = {"expectedRelease": release}
         try:
-            if mode == "run":
+            if mode == "collect":
+                remaining(deadline)
                 token = secrets.token_urlsafe(48)
                 port = unused_local_port()
                 adapter = subprocess.Popen(
@@ -228,15 +244,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--check", action="store_true", help="Read production status without an adapter or model calls")
-    modes.add_argument("--run", action="store_true", help="Run one bounded production collection/publication cycle")
+    modes.add_argument("--collect", action="store_true", help="Collect and process without composing an issue")
+    modes.add_argument("--publish", action="store_true", help="Publish the closed issue without collection or model calls")
+    parser.add_argument("--before", help="Stop collection by this timezone-qualified ISO timestamp")
     args = parser.parse_args(argv)
+    if args.before is not None and not args.collect:
+        parser.error("--before is only valid with --collect")
 
     def interrupted(_signum, _frame):
         raise KeyboardInterrupt
 
     previous = signal.signal(signal.SIGTERM, interrupted)
     try:
-        return run("run" if args.run else "check")
+        mode = "collect" if args.collect else "publish" if args.publish else "check"
+        return run(mode) if args.before is None else run(mode, before=args.before)
     except (TransportError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as error:
         message = "Daily publisher interrupted" if isinstance(error, KeyboardInterrupt) else str(error)
         print(json.dumps({"ok": False, "stage": "transport", "error": message}), file=sys.stderr)

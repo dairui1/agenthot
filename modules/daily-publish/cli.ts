@@ -8,7 +8,7 @@ import { check } from "./workflow.ts";
 import { runRecorded } from "./execute.ts";
 
 const mode = process.argv[2];
-if (process.argv.length !== 3 || !["--check", "--run"].includes(mode)) throw new Error("Usage: node modules/daily-publish/cli.ts --check|--run");
+if (process.argv.length !== 3 || !["--check", "--collect", "--publish"].includes(mode)) throw new Error("Usage: node modules/daily-publish/cli.ts --check|--collect|--publish");
 installModules(SERVER_MODULES);
 try {
   assertProductionSecrets([["auth", "IMG_PROXY_SIGN_SECRET"]]);
@@ -16,7 +16,7 @@ try {
     const result = check(await production.snapshot());
     console.log(JSON.stringify(result));
     if (!result.ready) process.exitCode = 1;
-  } else await runRecorded(production, result => console.log(JSON.stringify(result)));
+  } else await runRecorded(production, mode === "--collect" ? "collect" : "publish", result => console.log(JSON.stringify(result)));
 } catch {
   // Provider errors can contain request URLs or bodies; detailed state stays in the existing
   // restricted database records, not in scheduler output.

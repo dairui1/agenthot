@@ -170,7 +170,11 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
     }
   }
   let items = c.itemsPath ? getPath(data, c.itemsPath) : c.jsonKey ? getPath(data, c.jsonKey) : data;
-  if (c.itemsObjectValues && items && typeof items === "object" && !Array.isArray(items)) items = Object.values(items);
+  if (c.singletonItem === true) {
+    if (c.itemsObjectValues) throw new FetchError("singletonItem cannot use itemsObjectValues");
+    if (!items || typeof items !== "object" || Array.isArray(items)) throw new FetchError("singletonItem did not resolve to an object");
+    items = [items];
+  } else if (c.itemsObjectValues && items && typeof items === "object" && !Array.isArray(items)) items = Object.values(items);
   if (!Array.isArray(items)) throw new FetchError("items path did not resolve to an array");
 
   const out: Candidate[] = [];

@@ -387,6 +387,8 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
         EXCLUDED.indexable, EXCLUDED.story_id, EXCLUDED.fact_id, EXCLUDED.search_text,
         EXCLUDED.sort_at)`;
 
+  for (const module of serverModules()) await module.publicationProjected?.({ articleId, sourceId: source.id, at: now }, tx);
+
   // The pool search row follows eligibility; its body part only covers full text the site may show.
   if (eligible) {
     const body = bodyMode === "full" ? (article.body_text ?? "").slice(0, 12000).toLowerCase() : "";

@@ -26,10 +26,11 @@ after(async () => { await stopBoss(); await closeDb(); });
 
 async function item(time: Date) {
   const id = `provisional-${tag()}`;
+  const url = `https://example.com/${id}`;
   await sql`INSERT INTO articles (id, source_id, identity_key, url, title, discovered_at, timeline_at)
-    VALUES (${id}, ${SOURCE}, ${id}, 'https://example.com/provisional', ${id}, ${time}, ${time})`;
+    VALUES (${id}, ${SOURCE}, ${id}, ${url}, ${id}, ${time}, ${time})`;
   await sql`INSERT INTO publications (article_id, title, source_id, channel, url, discovered_at, timeline_at, sort_at, eligible, selected, visible_after, visibility, score)
-    VALUES (${id}, ${id}, ${SOURCE}, 'news', 'https://example.com/provisional', ${time}, ${time}, ${time}, true, true, ${time}, 'public', 90)`;
+    VALUES (${id}, ${id}, ${SOURCE}, 'news', ${url}, ${time}, ${time}, ${time}, true, true, ${time}, 'public', 90)`;
   return id;
 }
 
@@ -92,7 +93,7 @@ test("an early cutoff advances with a revision but repeat and backward cutoffs d
   assert.deepEqual(await report(), saved);
 });
 
-test("the normal 10:00 run finalizes once, adds later entries and keeps the early revision without model calls", async (t) => {
+test("the normal 08:30 run finalizes once, adds later entries and keeps the early revision without model calls", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: early() });
   const first = await item(at(-7 * 3600));
   await composeDaily(DATE, undefined, { asOf: early() });
@@ -100,7 +101,7 @@ test("the normal 10:00 run finalizes once, adds later entries and keeps the earl
   const later = await item(at(-3600));
   await item(at());
   const before = await modelCounts();
-  t.mock.timers.setTime(at(2 * 3600).getTime());
+  t.mock.timers.setTime(at(30 * 60).getTime());
   assert.equal((await composeDaily(DATE)).entries, 2);
   const final = (await report())!;
   assert.equal(final.revision, 2);
