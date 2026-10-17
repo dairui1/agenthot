@@ -89,3 +89,38 @@ test("only explicit, valid early-edition metadata is public", async () => {
     assert.equal((await dailyWithNotes(key))!.edition, undefined);
   }
 });
+
+test("late publication limits survive site, v1, RSS, Agent HTTP and MCP without private audit details", async () => {
+  const lateKey = "2026-10-16";
+  const cutoff = "2026-10-16T00:00:00.000Z";
+  const note = "本期补发。7 项模型结果待核验、4 项正文不可用，未纳入本期。";
+  const generated = "2026-10-16T02:30:00.000Z";
+  await sql`INSERT INTO reports(kind,key,window_start,window_end,generated_at,origin,content)
+    VALUES ('daily',${lateKey},'2026-10-15T00:00:00Z',${cutoff},${generated},'manual',${sql.json({
+    sections: [], flashes: [], publicationNote: note,
+    audit: { receiptIds: [97, 98, 99, 100, 101, 102, 103], privateMarker: "private-audit-only" },
+  })})`;
+  const site = (await loadReport("daily", lateKey))!;
+  assert.equal(site.publicationNote, note);
+  assert.equal(site.generatedAt, generated);
+  const v1 = (await v1Daily(lateKey))!.report;
+  assert.equal(v1.publicationNote, note);
+  assert.equal(v1.windowEnd, cutoff);
+  const rss = new XMLParser().parse(await reportFeed("daily")).rss.channel.item[0];
+  assert.match(rss.description, /7 项模型结果待核验、4 项正文不可用/);
+  assert.equal(new Date(rss.pubDate).toISOString(), generated);
+  const check = (text: string) => {
+    assert.match(text, /7 项模型结果待核验、4 项正文不可用/);
+    assert.match(text, /实际发布：.*10-16 10:30（UTC\+8）/);
+    assert.doesNotMatch(text, /private-audit-only|receiptIds|提前版/);
+  };
+  check((await app.inject(`/api/v1/agent/daily/${lateKey}`)).body);
+  const client = new Client({ name: "late-check", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/api/mcp`)));
+    const result = await client.callTool({ name: MCP_TOOL_NAMES.daily, arguments: { date: lateKey } });
+    assert.ok(!result.isError);
+    check(result.content.filter(part => part.type === "text").map(part => part.text).join("\n"));
+  } finally { await client.close(); }
+  assert.doesNotMatch(JSON.stringify({ site, v1, rss }), /private-audit-only|receiptIds/);
+});

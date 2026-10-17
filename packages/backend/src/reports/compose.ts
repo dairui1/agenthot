@@ -10,7 +10,7 @@ import { promptText, promptVersion } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
 import { ENTITIES, isRelease } from "../editorial/vocabulary.ts";
 import { addDays, beijingAt, beijingDate, beijingTime, isoWeekLabel, isoWeekRange, monthRange } from "@aihot/contracts/time";
-import { sql } from "../db.ts";
+import { sql, type Db, type Tx } from "../db.ts";
 import { logError } from "../lib/log-error.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
@@ -62,10 +62,10 @@ async function savedReport(kind: ReportKind, key: string) {
  * it is. With a reason (an explicit regeneration) the issue is replaced and the edition it replaces is
  * kept as a revision. Says whether the issue was written.
  */
-async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[], dailyMode?: "provisional" | "finalize"): Promise<boolean> {
-  return sql.begin(async (tx) => {
+async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[], dailyMode?: "provisional" | "finalize", transaction?: Tx, origin = "model"): Promise<boolean> {
+  const save = async (tx: Tx) => {
     const insert = async () => (await tx`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, model, origin)
-      VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (kind, key) DO NOTHING`).count > 0;
+      VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, ${origin === "manual" ? tx`clock_timestamp()` : tx`now()`}, ${model}, ${origin}) ON CONFLICT (kind, key) DO NOTHING`).count > 0;
     let written: boolean;
     if (kind === "daily" && await insert()) written = true;
     else if (reason === undefined) written = await insert();
@@ -90,13 +90,50 @@ async function saveReport(kind: ReportKind, key: string, start: Date, end: Date,
     if (written) await emit("reportsChanged", { reason: `${kind} ${key} published` }, tx);
     for (const id of receiptIds) await completeReceipt(tx, id);
     return written;
-  });
+  };
+  return transaction ? save(transaction) : sql.begin(save);
 }
 
 /** "10 月 4 日 08:00": one end of a quiet issue's window, as its lead paragraph names it. */
 function windowPoint(at: Date): string {
   const day = beijingDate(at);
   return `${Number(day.slice(5, 7))} 月 ${Number(day.slice(8, 10))} 日 ${beijingTime(at)}`;
+}
+
+/** Render an already verified edition with the same quotas, ranking and metrics as the scheduler. */
+export function dailyContent(date: string, start: Date, end: Date, edition: Awaited<ReturnType<typeof dailyEdition>>) {
+  if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
+  const issue = arrangeDaily(edition.entries);
+  const [lead, ...rest] = issue.main;
+  const content = {
+    date,
+    lead: lead
+      ? { title: lead.entry.title, leadParagraph: lead.entry.summary }
+      : { title: REPORTS.quiet.title, leadParagraph: REPORTS.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
+    leadItemId: lead?.entry.itemId ?? null,
+    highlights: rest.slice(0, 3).map((e) => e.entry.itemId),
+    sections: SECTION_ORDER
+      .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
+      .filter((s) => s.items.length > 0),
+    flashes: issue.flashes.map((e) => e.entry),
+    metrics: dailyMetrics(issue.main),
+    windowStart: start.toISOString(), windowEnd: end.toISOString(),
+    generator: { version: REPORT_VERSION, ...edition.stats, ...issue.stats },
+  };
+  return { content, entries: issue.main.length };
+}
+
+/** An unsaved native daily draft, optionally read wholly in a caller's transaction. */
+export async function prepareDaily(date: string, db: Db = sql) {
+  const end = beijingAt(date, EDITION_TIMES.daily);
+  const start = new Date(end.getTime() - 86400000);
+  const edition = await dailyEdition(date, start, end, db);
+  return { key: date, start, end, edition, ...dailyContent(date, start, end, edition) };
+}
+
+/** Insert only, using the normal save/emit path; the caller commits its audit with this write. */
+export function saveDailyInTransaction(tx: Tx, draft: { key: string; start: Date; end: Date; content: Record<string, unknown> }) {
+  return saveReport("daily", draft.key, draft.start, draft.end, draft.content, undefined, null, [], undefined, tx, "manual");
 }
 
 /**
@@ -133,32 +170,17 @@ export async function composeDaily(date: string, reason?: string, options: { asO
   }
   const edition = await dailyEdition(date, start, end);
   // Nothing judged in the window is a failure upstream, not a quiet day: the run fails and is caught up later.
-  if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
-  const issue = arrangeDaily(edition.entries);
-  const [lead, ...rest] = issue.main;
+  const rendered = dailyContent(date, start, end, edition);
   const content = {
-    date,
-    lead: lead
-      ? { title: lead.entry.title, leadParagraph: lead.entry.summary }
-      : { title: REPORTS.quiet.title, leadParagraph: REPORTS.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
-    leadItemId: lead?.entry.itemId ?? null,
-    highlights: rest.slice(0, 3).map((e) => e.entry.itemId),
-    sections: SECTION_ORDER
-      .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
-      .filter((s) => s.items.length > 0),
-    flashes: issue.flashes.map((e) => e.entry),
-    metrics: dailyMetrics(issue.main),
-    windowStart: start.toISOString(),
-    windowEnd: end.toISOString(),
+    ...rendered.content,
     ...(dailyMode === "provisional" ? { edition: { status: "provisional", scheduledWindowEnd: scheduledEnd.toISOString() } } : {}),
-    generator: { version: REPORT_VERSION, ...edition.stats, ...issue.stats },
   };
   const written = await saveReport("daily", date, start, end, content, reason, null, [], dailyMode);
   if (!written) {
     const saved = await savedReport("daily", date);
     if (saved) return { key: date, entries: saved.entries };
   }
-  return { key: date, entries: issue.main.length };
+  return { key: date, entries: rendered.entries };
 }
 
 /** A weekly's or monthly's size: the events it carries, chosen and ordered by rule. */

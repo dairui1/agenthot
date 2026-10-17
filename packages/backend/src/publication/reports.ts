@@ -21,6 +21,11 @@ interface ReportRow {
   generated_at: Date;
 }
 
+function publicationNote(content: ReportRow["content"]): { publicationNote?: string } {
+  const note = content.publicationNote;
+  return typeof note === "string" && note.trim() && note.length <= 500 ? { publicationNote: note.trim() } : {};
+}
+
 function provisionalEdition(kind: ReportKind, content: ReportRow["content"], windowEnd: Date): ReportDetail["edition"] {
   const scheduledEnd = typeof content.edition?.scheduledWindowEnd === "string" ? Date.parse(content.edition.scheduledWindowEnd) : NaN;
   if (kind !== "daily" || content.edition?.status !== "provisional" || !(scheduledEnd > windowEnd.getTime())) return undefined;
@@ -375,6 +380,7 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
     issueNumber: r.issue_number,
     title,
     generatedAt: r.generated_at.toISOString(),
+    ...publicationNote(c),
     ...(edition ? { edition } : {}),
     lead: hasCitedLead
       ? (named ? { title: named.title, leadParagraph: (kind === "daily" ? named.leadParagraph : overview) ?? "" } : null)
@@ -488,6 +494,7 @@ export async function dailyWithNotes(date: string | "latest") {
     report: {
       date: r.key,
       generatedAt: r.generated_at.toISOString(),
+      ...publicationNote(c),
       windowStart: r.window_start.toISOString(),
       windowEnd: r.window_end.toISOString(),
       links: { aihot: url },
@@ -522,6 +529,7 @@ export async function v1Daily(date: string | "latest") {
 export interface FeedIssue {
   key: string;
   generatedAt: Date;
+  publicationNote?: string;
   edition?: ReportDetail["edition"];
   headline: string | null;
   /** A daily's lead paragraph; a weekly's or monthly's overview. */
@@ -537,7 +545,7 @@ export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedI
   const rows = kind === "daily"
     ? await sql<{ key: string; generated_at: Date; window_end: Date; content: Record<string, any> }[]>`
       SELECT key, generated_at, window_end, jsonb_build_object(
-        'edition', content->'edition',
+        'edition', content->'edition', 'publicationNote', content->'publicationNote',
         'lead', content->'lead', 'leadItemId', content->'leadItemId', 'highlights', content->'highlights',
         'sections', (SELECT coalesce(jsonb_agg(jsonb_build_object('label', s->'label', 'items',
           (SELECT coalesce(jsonb_agg(jsonb_build_object('itemId', i->'itemId', 'title', i->'title') ORDER BY ord), '[]'::jsonb)
@@ -565,6 +573,7 @@ export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedI
     return {
       key: r.key,
       generatedAt: r.generated_at,
+      ...publicationNote(r.content),
       ...(edition ? { edition } : {}),
       headline: lead?.title ?? null,
       leadParagraph: kind === "daily" ? lead?.leadParagraph ?? null : periodOverview(r.content, kind, gone),

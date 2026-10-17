@@ -207,7 +207,7 @@ function issueXml(kind: ReportKind, r: FeedIssue): string {
   const title = r.headline ? `${name} · ${r.key} — ${r.headline}` : `${name} · ${r.key}`;
   const contents = r.sections.map((s) => `<p><strong>${escapeXml(s.label)}</strong></p>\n<ul>${s.items.map((i) => `<li><a href="${escapeXml(i.link)}">${escapeXml(i.title)}</a></li>`).join("")}</ul>`);
   const early = r.edition ? `提前版 · 截至 ${beijingDate(r.edition.windowEnd)} ${beijingTime(r.edition.windowEnd)}（UTC+8）` : null;
-  const description = [...(early ? [`<p>${escapeXml(early)}</p>`] : []), `<p>${escapeXml(r.leadParagraph ?? r.headline ?? "")}</p>`, ...contents, `<p>via ${escapeXml(SITE.name)} · <a href="${url}">${url}</a></p>`].join("\n");
+  const description = [...(early ? [`<p>${escapeXml(early)}</p>`] : []), ...(r.publicationNote ? [`<p>${escapeXml(r.publicationNote)}</p>`] : []), `<p>${escapeXml(r.leadParagraph ?? r.headline ?? "")}</p>`, ...contents, `<p>via ${escapeXml(SITE.name)} · <a href="${url}">${url}</a></p>`].join("\n");
   return `    <item>
       <title>${cdata(title)}</title>
       <link>${url}</link>

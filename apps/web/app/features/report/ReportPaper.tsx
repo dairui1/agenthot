@@ -70,6 +70,12 @@ function Masthead({ report, index, quiet }: { report: ReportDetail; index: Repor
         </p>
       )}
 
+      {report.publicationNote && (
+        <p className="mb-4 text-[12px] leading-6 text-ink-3">
+          {report.publicationNote} 实际发布：<time dateTime={report.generatedAt}>{monthDayTime(report.generatedAt)}（UTC+8）</time>。
+        </p>
+      )}
+
       {/* A quiet day has no figures to set and nothing to read through: the masthead just closes. */}
       {quiet ? (
         <div aria-hidden="true" className="border-t border-line-strong" />

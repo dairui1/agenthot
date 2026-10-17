@@ -305,6 +305,8 @@ export interface ReportDetail {
   issueNumber: number;
   title: string;
   generatedAt: string;
+  /** A public editorial notice about this issue's publication or coverage limits. */
+  publicationNote?: string;
   /** An explicitly published early daily, with its actual cutoff and the scheduled final cutoff. */
   edition?: { status: "provisional"; windowEnd: string; scheduledWindowEnd: string };
   lead: { title: string; leadParagraph: string } | null;

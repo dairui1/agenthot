@@ -44,3 +44,16 @@ test("ordinary finalized daily mastheads have no extra edition label", async () 
   assert.match(html.replace(/<[^>]+>/g, ""), /每天 08:00 截稿/);
   assert.doesNotMatch(html.replace(/<[^>]+>/g, ""), /每天 08:00 出刊/);
 });
+
+test("a late issue keeps its coverage notice and real publication time on both pages", async () => {
+  report.publicationNote = "本期补发。7 项模型结果待核验、4 项正文不可用，未纳入本期。";
+  report.generatedAt = "2026-10-15T02:30:00.000Z";
+  for (const path of ["/daily", `/daily/${key}`]) {
+    const response = await fetch(`${web.origin}${path}`);
+    const html = await response.text();
+    assert.equal(response.status, 200, web.logs());
+    assert.match(html.replace(/<[^>]+>/g, ""), /本期补发。7 项模型结果待核验、4 项正文不可用，未纳入本期。 实际发布：10月15日 10:30（UTC\+8）/);
+    assert.match(html, /dateTime="2026-10-15T02:30:00.000Z"/i);
+    assert.doesNotMatch(html, /提前版/);
+  }
+});

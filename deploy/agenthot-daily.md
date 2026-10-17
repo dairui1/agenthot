@@ -190,3 +190,31 @@ the retained logs. Receipts 97-103 have no retained responses and remain unknown
 do not relabel them as rejected or complete. Late publication still requires an
 explicit, audited editorial decision about unresolved material, not a fabricated
 pre-cutoff collection success or a change to selection thresholds.
+
+## Explicit Late Publication
+
+Late publication with unresolved material is a separate operator action, never a
+fallback for the scheduled job. It requires the owner's explicit approval of the
+exact article revisions to exclude. The normal `--publish` preparation gate is
+unchanged. A late issue keeps the configured daily window and records its real
+publication time; it does not collect, call a model, release receipts, alter
+article states or turn a failed collection into a successful one.
+
+The approval manifest binds the deployment, original collection job and detail
+hash, enabled source snapshot, successful pre-cutoff fetch records, and each
+approved exclusion's evidence. A read-only check produces a plan hash. Publishing
+rechecks that exact plan in one serializable transaction and inserts the report,
+private audit and manual job record together. New debt, changed evidence, a
+different existing issue or a conflicting plan stops publication. Repeating an
+already committed request returns its existing issue without another revision.
+
+The incident preview also verifies the current revision's analysis and grouping
+completion times. An event containing a revision completed after the cutoff is
+omitted, with the evidence and counts retained in the plan; the remaining events
+are arranged by the unchanged native rules. A later correction is not rewritten
+as an earlier version, and an empty result is not published as a quiet day.
+
+The report's public publication note states the material gaps, while internal
+article/receipt identifiers remain in the private audit. Site pages, JSON, RSS,
+Agent Markdown and MCP retain that note. A successfully published late issue
+does not imply the underlying incomplete queue has been repaired or completed.

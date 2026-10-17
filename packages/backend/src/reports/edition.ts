@@ -8,7 +8,7 @@
 // (industry/taxonomy.ts CATEGORIES).
 import { addDays } from "@aihot/contracts/time";
 import { CATEGORIES } from "@aihot/industry/taxonomy";
-import { sql } from "../db.ts";
+import { sql, type Db } from "../db.ts";
 import { serverModules } from "../modules.ts";
 import { identityKeyForUrl } from "../lib/url.ts";
 import { currentSignals } from "../events/hot.ts";
@@ -111,8 +111,8 @@ export async function periodReports(start: Date, end: Date): Promise<ReportRow[]
   return (await reportCandidates(start, end, false)).selected;
 }
 
-async function reportCandidates(start: Date, end: Date, includeModules: boolean): Promise<{ selected: ReportRow[]; supplied: ReportRow[] }> {
-  return sql.begin("isolation level read committed", async (tx) => {
+async function reportCandidates(start: Date, end: Date, includeModules: boolean, db: Db = sql): Promise<{ selected: ReportRow[]; supplied: ReportRow[] }> {
+  const read = async (tx: Db) => {
     // Wait for in-flight releases and keep later ones outside this snapshot. The following SELECT
     // gets a fresh READ COMMITTED snapshot; model calls and report writes happen after the lock ends.
     await tx`SELECT pg_advisory_xact_lock(hashtext('report_candidates'))`;
@@ -160,7 +160,8 @@ async function reportCandidates(start: Date, end: Date, includeModules: boolean)
       if (proposal) { row.arrangementKey = proposal.arrangementKey; row.equivalentUrls = proposal.equivalentUrls; }
     }
     return { selected, supplied: supplied.filter(row => !selectedIds.has(row.id)) };
-  });
+  };
+  return db === sql ? sql.begin("isolation level read committed", read) : read(db);
 }
 
 function roleOf(kind: string, official: boolean): string {
@@ -277,8 +278,8 @@ export function citedIn(content: Record<string, any>): Array<Record<string, any>
  * and their events with the latest issue and headline that covered each. Facts and events are also
  * read from the cited reports' current grouping, so a later merge or regrouping still counts.
  */
-export async function dailyMemory(date: string): Promise<{ keys: Set<string>; stories: Map<number, { key: string; title: string }> }> {
-  const issues = await sql<{ key: string; content: Record<string, any> }[]>`
+export async function dailyMemory(date: string, db: Db = sql): Promise<{ keys: Set<string>; stories: Map<number, { key: string; title: string }> }> {
+  const issues = await db<{ key: string; content: Record<string, any> }[]>`
     SELECT key, content FROM reports WHERE kind = 'daily' AND key < ${date} AND key >= ${addDays(date, -MEMORY_DAYS)} ORDER BY key DESC`;
   const keys = new Set<string>();
   const cited = new Map<string, { key: string; title: string }>();
@@ -297,7 +298,7 @@ export async function dailyMemory(date: string): Promise<{ keys: Set<string>; st
   }
   const stories = new Map<number, { key: string; title: string }>();
   if (cited.size === 0) return { keys, stories };
-  const current = await sql<{ id: string; fact_public_id: string | null; story_id: number | null }[]>`
+  const current = await db<{ id: string; fact_public_id: string | null; story_id: number | null }[]>`
     SELECT p.article_id AS id, f.public_id AS fact_public_id, f.story_id FROM publications p
     LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
     WHERE p.article_id = ANY(${[...cited.keys()]}::text[])`;
@@ -317,8 +318,8 @@ export async function dailyMemory(date: string): Promise<{ keys: Set<string>; st
  * active in the window and begun at most a day before it. Each comes with its listed editorial reports,
  * from which the issue takes the most authoritative one.
  */
-async function missedFacts(start: Date, end: Date): Promise<Array<{ key: string; rows: ReportRow[] }>> {
-  const found = await sql<{ fact_id: number }[]>`
+async function missedFacts(start: Date, end: Date, db: Db = sql): Promise<Array<{ key: string; rows: ReportRow[] }>> {
+  const found = await db<{ fact_id: number }[]>`
     WITH active AS (
       SELECT DISTINCT fa.fact_id FROM fact_articles fa
       JOIN publications p ON p.article_id = fa.article_id JOIN sources s ON s.id = p.source_id
@@ -335,7 +336,7 @@ async function missedFacts(start: Date, end: Date): Promise<Array<{ key: string;
     GROUP BY fa.fact_id
     HAVING count(DISTINCT cs.participant_key) >= 3 AND min(cs.observed_at) >= ${start}::timestamptz - interval '24 hours'`;
   if (found.length === 0) return [];
-  const rows = await sql<ReportRow[]>`
+  const rows = await db<ReportRow[]>`
     SELECT ${REPORT_FIELDS}
     FROM fact_articles fa JOIN publications p ON p.article_id = fa.article_id JOIN sources s ON s.id = p.source_id
     JOIN facts f ON f.id = fa.fact_id LEFT JOIN stories st ON st.id = f.story_id
@@ -347,8 +348,8 @@ async function missedFacts(start: Date, end: Date): Promise<Array<{ key: string;
 }
 
 /** The window's public reports the editors scored: none means judging did not run there, not a quiet day. */
-async function judgedReports(start: Date, end: Date): Promise<number> {
-  const [row] = await sql<{ n: number }[]>`
+async function judgedReports(start: Date, end: Date, db: Db = sql): Promise<number> {
+  const [row] = await db<{ n: number }[]>`
     SELECT count(*)::int AS n FROM publications p
     WHERE ${listedCondition(end)} AND p.score IS NOT NULL AND NOT p.backfill AND p.timeline_at >= ${start} AND p.timeline_at < ${end}`;
   return row!.n;
@@ -370,8 +371,8 @@ interface Fact { key: string; rows: ReportRow[]; admitted: boolean; sources: str
  * The daily's events for the window [start, end), most important first, before the editors' pass:
  * selected reports and missed facts, minus what the week's issues already carried, one entry per event.
  */
-export async function dailyEdition(date: string, start: Date, end: Date): Promise<{ entries: EditionEntry[]; stats: Record<string, number> }> {
-  const [memory, { selected, supplied }, missed, judged] = await Promise.all([dailyMemory(date), reportCandidates(start, end, true), missedFacts(start, end), judgedReports(start, end)]);
+export async function dailyEdition(date: string, start: Date, end: Date, db: Db = sql): Promise<{ entries: EditionEntry[]; stats: Record<string, number> }> {
+  const [memory, { selected, supplied }, missed, judged] = await Promise.all([dailyMemory(date, db), reportCandidates(start, end, true, db), missedFacts(start, end, db), judgedReports(start, end, db)]);
   const admitted = [...selected, ...supplied];
   const admittedIds = new Set(admitted.map(row => row.id));
   const unique = new Map([...missed.flatMap(f => f.rows), ...admitted].map(row => [row.id, row]));
@@ -386,7 +387,7 @@ export async function dailyEdition(date: string, start: Date, end: Date): Promis
       || (ownUrl !== null && memory.keys.has(ownUrl));
   }));
   const factIds = [...new Set(kept.map((f) => f.rows[0]!.fact_id).filter((id): id is number => id !== null))];
-  const sourcesOf = await factSources(factIds, end);
+  const sourcesOf = await factSources(factIds, end, db);
   const facts: Fact[] = kept.map((f) => {
     const id = f.rows[0]!.fact_id;
     return {
@@ -403,14 +404,14 @@ export async function dailyEdition(date: string, start: Date, end: Date): Promis
   const loose = events.filter((fs) => fs[0]!.rows[0]!.story_id === null).flatMap((fs) => fs.flatMap((f) => f.rows.map((r) => r.id)));
   const [talk, named] = await Promise.all([
     storyIds.length
-      ? sql<{ story_id: number; participants: number }[]>`
+      ? db<{ story_id: number; participants: number }[]>`
         SELECT cs.story_id, count(DISTINCT cs.participant_key)::int AS participants FROM ${currentSignals()} cs
         WHERE cs.story_id = ANY(${storyIds}::bigint[]) AND cs.observed_at >= ${start} AND cs.observed_at < ${end}
         GROUP BY cs.story_id`
       : [],
     // A report without an event of its own is a roundup when the event graph linked it to the facts it mentions.
     loose.length
-      ? sql<{ article_id: string; story_id: number }[]>`
+      ? db<{ article_id: string; story_id: number }[]>`
         SELECT DISTINCT fa.article_id, f.story_id FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id
         WHERE fa.article_id = ANY(${loose}::text[]) AND f.story_id IS NOT NULL`
       : [],
