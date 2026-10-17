@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CompletionJournal, digest, validDigest, type Reservation } from "./journal.ts";
 
 const MODEL = "gpt-6.1-sol";
 const MAX_BODY = 1024 * 1024;
@@ -58,6 +59,7 @@ export function codexArgs(dir: string): string[] {
 }
 
 export async function runCompletion(input: Completion, signal: AbortSignal) {
+  signal.throwIfAborted();
   const dir = await mkdtemp(path.join(tmpdir(), "agenthot-codex-"));
   try {
     await writeFile(path.join(dir, "output.schema.json"), JSON.stringify(SCHEMA), { mode: 0o600 });
@@ -67,6 +69,7 @@ export async function runCompletion(input: Completion, signal: AbortSignal) {
       input.json ? "The content string must itself contain one valid JSON object following the editorial instructions." : "The content string must contain the requested plain text answer.",
       JSON.stringify(input.messages),
     ].join("\n\n");
+    signal.throwIfAborted();
     const child = spawn(codexBinary(), codexArgs(dir), {
       cwd: dir, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
       // Keep only login/runtime essentials, never inherited provider keys or project secrets.
@@ -96,6 +99,7 @@ export async function runCompletion(input: Completion, signal: AbortSignal) {
       code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
     } finally {
       signal.removeEventListener("abort", abort);
+      if (stopping) kill("SIGKILL");
       if (escalation) clearTimeout(escalation);
     }
     if (signal.aborted) throw new BridgeError("Codex request interrupted or timed out", 504);
@@ -115,7 +119,7 @@ export async function runCompletion(input: Completion, signal: AbortSignal) {
   }
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
+async function readBody(req: IncomingMessage): Promise<{ value: unknown; hash: string }> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -123,33 +127,59 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
     if (size > MAX_BODY) throw new BridgeError("Request body too large", 413);
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw new BridgeError("Invalid JSON"); }
+  const body = Buffer.concat(chunks);
+  try { return { value: JSON.parse(body.toString()), hash: digest(body) }; } catch { throw new BridgeError("Invalid JSON"); }
 }
 
-export function createBridge(token: string, run = runCompletion) {
+export function createBridge(token: string, run = runCompletion, options: { journalDir?: string } = {}) {
   if (token.length < 32) throw new Error("CODEX_CLI_TOKEN must have at least 32 characters");
+  const journal = new CompletionJournal(options.journalDir);
   let active = 0;
+  let closing = false;
+  const controllers = new Set<AbortController>();
+  const pending = new Set<Promise<void>>();
   const server = createServer((req, res) => {
-    const send = (status: number, data: unknown) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
-    void (async () => {
+    const send = (status: number, data: unknown) => { if (res.destroyed || res.writableEnded) return; res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
+    const task = (async () => {
       const auth = Buffer.from(req.headers.authorization ?? "");
       const wanted = Buffer.from(`Bearer ${token}`);
       if (auth.length !== wanted.length || !timingSafeEqual(auth, wanted)) return send(401, { error: { message: "Unauthorized" } });
       if (req.method !== "POST" || req.url !== "/v1/chat/completions") return send(404, { error: { message: "Not found" } });
-      const input = parseCompletion(await readBody(req));
+      const body = await readBody(req);
+      const input = parseCompletion(body.value);
+      const key = req.headers["x-agenthot-request-key"];
+      const bodyHash = req.headers["x-agenthot-body-sha256"];
+      if (!validDigest(key) || !validDigest(bodyHash)) throw new BridgeError("Stable request key and body digest are required");
+      // A conflicting key must remain unknown upstream, not become a retryable HTTP rejection.
+      if (bodyHash !== body.hash) throw new BridgeError("Request body digest mismatch", 409, true);
+      if (closing) throw new BridgeError("Codex adapter is stopping", 503);
       if (active >= 4) return send(429, { error: { message: "Codex adapter is busy" } });
       active += 1;
       const disconnect = new AbortController();
+      controllers.add(disconnect);
       const cancel = () => { if (!res.writableEnded) disconnect.abort(); };
       res.once("close", cancel);
+      let reservation: Reservation | undefined;
       try {
+        const saved = await journal.reserve(key, bodyHash);
+        if ("response" in saved) return send(200, saved.response);
+        reservation = saved.reservation;
+        disconnect.signal.throwIfAborted();
         const answer = await run(input, AbortSignal.any([disconnect.signal, AbortSignal.timeout(90_000)]));
-        send(200, { id: `codex-${randomUUID()}`, object: "chat.completion", model: input.model,
+        const response = { id: `codex-${key}`, object: "chat.completion", model: input.model,
           choices: [{ index: 0, message: { role: "assistant", content: answer.content }, finish_reason: "stop" }],
           usage: answer.usage ? { prompt_tokens: answer.usage.input_tokens, completion_tokens: answer.usage.output_tokens,
             total_tokens: Number(answer.usage.input_tokens ?? 0) + Number(answer.usage.output_tokens ?? 0) } : null,
-          _codex: { transport: "codex-cli", reasoning_effort: "low", temperatureApplied: false, maxTokensApplied: false } });
-      } finally { active -= 1; res.off("close", cancel); }
+          _codex: { transport: "codex-cli", reasoning_effort: "low", temperatureApplied: false, maxTokensApplied: false } };
+        await journal.complete(reservation, response);
+        send(200, response);
+      } catch (error) {
+        if (reservation) {
+          await journal.unknown(reservation).catch(() => {});
+          throw new BridgeError("Codex request outcome is unconfirmed", 502);
+        }
+        throw error;
+      } finally { active -= 1; controllers.delete(disconnect); res.off("close", cancel); }
     })().catch((error: unknown) => {
       // An interrupted CLI may already have consumed quota. A fabricated HTTP rejection would
       // release the upstream receipt for automatic retry; a dropped connection keeps it unknown.
@@ -157,7 +187,19 @@ export function createBridge(token: string, run = runCompletion) {
       if (!res.destroyed && !res.writableEnded) send(error instanceof BridgeError ? error.status : 502,
         { error: { message: error instanceof BridgeError ? error.message : "Codex adapter failed" } });
     });
+    pending.add(task);
+    void task.finally(() => pending.delete(task));
   });
   server.requestTimeout = 15_000;
-  return server;
+  let shutdown: Promise<void> | undefined;
+  return Object.assign(server, { shutdown() {
+    return shutdown ??= (async () => {
+      closing = true;
+      for (const controller of controllers) controller.abort();
+      const closed = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      server.closeAllConnections();
+      await Promise.all([...pending]);
+      await closed;
+    })();
+  } });
 }

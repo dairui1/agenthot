@@ -180,13 +180,18 @@ export async function runDaily(deps: Dependencies, phase: Phase): Promise<RunRes
   }
   const gathered = await deps.snapshot();
   globalProblem(...verify(gathered));
-  if (phase === "collect" && !verify(gathered).length) {
+  if (phase === "collect" && !globalProblems.length) {
+    const existingBlocked = new Set(scopedPending(gathered).filter(item => item.blockedReceipt).map(item => item.id));
     for (const candidate of pendingSummary(gathered).candidates) {
       // Re-read before every article: a paused source, an administrator's model change, or a
       // failed/unknown receipt must stop new work rather than reuse the original snapshot.
       const current = await deps.snapshot();
       const problems = runProblems(current);
       if (problems.length) { globalProblem(...problems); break; }
+      if (scopedPending(current).some(item => !item.backfill && item.blockedReceipt && !existingBlocked.has(item.id))) {
+        globalProblem("A live model receipt became unresolved during collection");
+        break;
+      }
       const article = pendingSummary(current).candidates.find(item => item.id === candidate.id);
       if (!article) continue;
       const processed: RunResult["processed"][number] = { id: article.id, state: "failed" };
@@ -201,6 +206,7 @@ export async function runDaily(deps: Dependencies, phase: Phase): Promise<RunRes
             if (!["ok", "unconfirmed", "skipped"].includes(processed.extraction)) {
               processed.state = "extraction-incomplete";
               result.problems.push(`Extraction ${processed.extraction}: ${article.id}`);
+              if (processed.extraction !== "retrying") break;
               continue;
             }
           }
@@ -211,7 +217,7 @@ export async function runDaily(deps: Dependencies, phase: Phase): Promise<RunRes
           if (!pendingSummary(beforeProcess).candidates.some(item => item.id === article.id)) {
             processed.state = "deferred";
             globalProblem(`Article changed before processing: ${article.id}`);
-            continue;
+            break;
           }
           step = "process";
           processed.state = (await deps.process(article.id, article.attemptTag ?? undefined)).state;
@@ -223,17 +229,26 @@ export async function runDaily(deps: Dependencies, phase: Phase): Promise<RunRes
           if (stepProblems.length) { globalProblem(...stepProblems); break; }
           if (!pendingSummary(beforeGroup).candidates.some(item => item.id === article.id && item.processingState === "analyzed")) {
             globalProblem(`Article changed before grouping: ${article.id}`);
-            continue;
+            break;
           }
           step = "group";
           const grouped = await deps.group(article.id);
           processed.grouping = grouped.verdict;
-          if (grouped.consolidationError || grouped.reclaimError || grouped.rematchError) globalProblem(`Grouping incomplete: ${article.id}`);
-        } else if (!["block", "unknown"].includes(processed.state)) result.problems.push(`Processing ${processed.state}: ${article.id}`);
+          if (grouped.consolidationError || grouped.reclaimError || grouped.rematchError) {
+            globalProblem(`Grouping incomplete: ${article.id}`);
+            break;
+          }
+        } else if (processed.state === "awaiting-source") result.problems.push(`Processing awaiting-source: ${article.id}`);
+        else if (!["block", "unknown"].includes(processed.state)) {
+          // One lost model result must not turn a broken transport into a batch of unknown calls.
+          globalProblem(`Processing ${processed.state}: ${article.id}`);
+          break;
+        }
       } catch {
         if (step === "verify") globalProblem(`Runtime verification failed: ${article.id}`);
         else if (step === "group") globalProblem(`Grouping failed: ${article.id}`);
-        else result.problems.push(`${step === "extract" ? "Extraction" : "Processing"} failed: ${article.id}`);
+        else globalProblem(`${step === "extract" ? "Extraction" : "Processing"} failed: ${article.id}`);
+        break;
       }
     }
   }

@@ -14,12 +14,17 @@ From the repository root, with Node 24.11+ and Python 3 available:
 
 ```sh
 python3 scripts/agenthot-daily.py --check
+python3 scripts/agenthot-daily.py --probe
 python3 scripts/agenthot-daily.py --collect
 python3 scripts/agenthot-daily.py --publish
 ```
 
 `--check` reads production state only. It does not start the adapter or enable
-collection/model calls. `--collect` creates a temporary local adapter, an SSH reverse
+collection/model calls. The explicit diagnostic `--probe` starts a temporary
+adapter and tests authenticated HTTP through the server loopback tunnel, without
+calling a model, collecting sources or creating receipts/jobs. It proves transport
+reachability, not model availability or publication readiness.
+`--collect` creates a temporary local adapter, an SSH reverse
 tunnel bound to server loopback, and one short-lived production container.
 The container runs the existing collection, analysis, publication and grouping
 functions, but never composes an issue. `--publish` uses the native daily composer
@@ -49,6 +54,13 @@ first. A local process lock and the fixed container name prevent concurrent runs
 Do not remove a lock file or an existing container to force a second run: inspect
 its owner and actual state first. A timeout is a failure, not proof that no model
 request was billed. Retain the corresponding receipts for investigation.
+
+Collection uses one SSH connection for the reverse tunnel and remote container.
+The operator sends a bounded heartbeat lease; EOF, an expired lease or a failed
+local adapter check stops only the container created by that invocation. The
+pipeline also stops the article batch at its first model or grouping failure,
+rather than submitting more articles through a broken connection. Native body
+retries and explicitly unavailable source material remain separately reported.
 
 ## Boundaries
 
@@ -150,3 +162,31 @@ queue. Report any remainder; never add a fourth run to manufacture success.
 The heartbeat stays quiet when nothing meaningful changed. Notify on a verified
 new publication, a failure, or a required operator action. An unavailable Mac can
 miss the planned start; no server-only schedule can use its local Codex login.
+
+## Unknown Model Outcomes
+
+The local adapter keeps a private response journal in `.data/codex-receipts/`.
+Its key is derived from the engine's logical receipt identity, including the
+attempt tag that distinguishes the two independent scoring calls. A body hash
+alone must never merge those calls. Reservations are durable before invoking
+Codex, and complete responses are durable before being sent back to the engine.
+An interrupted reservation is not permission to invoke Codex again; only a
+matching completed response can be replayed without a new model request.
+The journal contains response data but no prompts, adapter tokens or OAuth files.
+Keep it private, do not commit it, and do not delete unresolved entries to retry.
+
+Codex unknown receipts are excluded from the generic automatic recovery release.
+Do not use an administrator release or a new attempt tag to evade this boundary.
+Any evidence-backed reconciliation must match the original logical key, body
+hash, article revision and saved response, and preserve the attempt history.
+The journal cannot reconstruct historical answers that were never retained.
+Connection repair, elapsed time and absence of a local file cannot establish
+that an unknown request was never accepted or consumed quota.
+
+The 2026-10-17 incident exposed two separate defects: independent SSH sessions
+were not monitored together, and article processing continued after an unknown
+model outcome. The first network interruption itself was not attributable from
+the retained logs. Receipts 97-103 have no retained responses and remain unknown;
+do not relabel them as rejected or complete. Late publication still requires an
+explicit, audited editorial decision about unresolved material, not a fabricated
+pre-cutoff collection success or a change to selection thresholds.

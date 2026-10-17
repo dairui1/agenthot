@@ -6,7 +6,7 @@ import type { z } from "zod";
 import { PRESETS } from "@aihot/site/models";
 import { config, credential } from "../config.ts";
 import { sha256 } from "../lib/ids.ts";
-import { assertAccepted, paidRequest, ProviderRejectedError, rejectReceivedResponse } from "./receipts.ts";
+import { assertAccepted, logicalKeyFor, paidRequest, ProviderRejectedError, rejectReceivedResponse, type ReceiptRequest } from "./receipts.ts";
 
 export interface ModelSpec {
   key: string;
@@ -151,24 +151,35 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
     ...(spec.extra ?? {}),
   };
 
+  const request: ReceiptRequest = {
+    service: spec.service,
+    model: spec.model,
+    purpose: opts.purpose,
+    subject: opts.subject,
+    identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: spec.extra ?? null },
+    requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens },
+    attemptTag: opts.attemptTag,
+  };
+  const serializedBody = JSON.stringify(body);
+  const transportHeaders: Record<string, string> = {};
+  if (spec.service === "codex-cli") {
+    // The two independent scoring attempts have the same body, but different logical keys.
+    const transportRequestKey = sha256(logicalKeyFor(request));
+    const transportBodyHash = sha256(serializedBody);
+    request.requestSummary = { ...request.requestSummary, transportRequestKey, transportBodyHash };
+    transportHeaders["x-agenthot-request-key"] = transportRequestKey;
+    transportHeaders["x-agenthot-body-sha256"] = transportBodyHash;
+  }
   const receipt = await paidRequest(
-    {
-      service: spec.service,
-      model: spec.model,
-      purpose: opts.purpose,
-      subject: opts.subject,
-      identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: spec.extra ?? null },
-      requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens },
-      attemptTag: opts.attemptTag,
-    },
+    request,
     async () => {
       const started = Date.now();
       let res: Response;
       try {
         res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify(body),
+          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}`, ...transportHeaders },
+          body: serializedBody,
           signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
         });
       } catch (error) {

@@ -69,6 +69,72 @@ test("collection diagnostics do not copy private provider errors into scheduler 
   assert.deepEqual(Object.keys(result.collected[0]), ["sourceId", "status", "found", "created", "revised"]);
 });
 
+test("a source failure stops model work for the whole collection pass", async () => {
+  const f = fixture([article("a"), article("b")]);
+  f.deps.collect = async sourceId => ({ sourceId, status: "failed", found: 0, created: 0, revised: 0 });
+  const result = await runDaily(f.deps, "collect");
+  assert.equal(result.collectionVerified, false);
+  assert.deepEqual(result.processed, []);
+  assert.deepEqual(f.calls, []);
+});
+
+test("the first uncertain model result or exception stops the batch without retrying", async () => {
+  for (const state of ["unknown-receipt", "waiting", "retrying", "failed", "throw"]) {
+    const f = fixture([article("a"), article("b")]);
+    f.deps.process = async id => {
+      f.calls.push(`process:${id}`);
+      if (state === "throw") throw new Error("private provider diagnostic");
+      return { state };
+    };
+    const result = await runDaily(f.deps, "collect");
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.collectionVerified, false);
+    assert.equal(result.remaining?.total, 2);
+    assert.deepEqual(f.calls, ["collect:rss-approved", "process:a"], state);
+    assert.equal(JSON.stringify(result).includes("private provider diagnostic"), false);
+  }
+});
+
+test("grouping errors stop subsequent articles without repeating completed analysis", async () => {
+  for (const failure of ["throw", "consolidationError", "reclaimError", "rematchError"]) {
+    const f = fixture([article("a"), article("b")]);
+    f.deps.group = async id => {
+      f.calls.push(`group:${id}`);
+      if (failure === "throw") throw new Error("private grouping diagnostic");
+      return { verdict: "new-story", [failure]: "private grouping diagnostic" };
+    };
+    const result = await runDaily(f.deps, "collect");
+    assert.equal(result.collectionVerified, false);
+    assert.deepEqual(f.calls, ["collect:rss-approved", "process:a", "group:a"]);
+  }
+});
+
+test("a receipt becoming unknown between snapshots cannot silently disappear from the batch", async () => {
+  const f = fixture([article("a"), article("b")]);
+  const snapshot = f.deps.snapshot;
+  let reads = 0;
+  f.deps.snapshot = async () => {
+    if (++reads === 3) {
+      f.state.pending[0].processingState = "failed";
+      f.state.pending[0].blockedReceipt = true;
+    }
+    return snapshot();
+  };
+  const result = await runDaily(f.deps, "collect");
+  assert.equal(result.collectionVerified, false);
+  assert.equal(result.remaining?.blockedReceipts, 1);
+  assert.deepEqual(f.calls, ["collect:rss-approved"]);
+});
+
+test("already unresolved work is never retried or relabelled when processing fresh articles", async () => {
+  const f = fixture([article("old", { processingState: "failed", blockedReceipt: true }), article("fresh")]);
+  const result = await runDaily(f.deps, "collect");
+  assert.equal(result.status, "incomplete");
+  assert.equal(result.remaining?.blockedReceipts, 1);
+  assert.deepEqual(f.calls, ["collect:rss-approved", "process:fresh", "group:fresh"]);
+  assert.equal(f.state.pending[0].processingState, "failed");
+});
+
 test("check allows closed action valves and no transient adapter, but reports what a run requires", () => {
   const f = fixture();
   f.state.valves.COLLECT_ENABLED = "false";

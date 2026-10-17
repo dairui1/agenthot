@@ -1,7 +1,8 @@
 // In-doubt work. A stopped process leaves "pending" receipts and deliveries: they become
 // "unknown" and are never re-sent on their own. An unknown receipt is released once automatically after
 // half an hour without checking the provider's bill, so a lost answer costs at most one repeat; one that
-// turns unknown again waits for the admin, who checks the bill and releases it with a note. A released
+// turns unknown again waits for the admin, who checks the bill and releases it with a note. Codex CLI
+// has no bill lookup and is never automatically released. A released
 // receipt lets its request call again, and an article that stopped on it goes back to processing.
 import { audit, Conflict } from "../audit.ts";
 import { sql } from "../db.ts";
@@ -37,11 +38,13 @@ export async function releaseReceipt(id: number, input: { billed: boolean; note:
 /**
  * Unknown receipts older than half an hour, released without checking the provider's bill. A request
  * released this way once and unknown again stays for the admin (the alerts' follow-ups list it).
+ * Codex CLI requires evidence-based recovery; elapsed time never proves its request was not sent.
  */
 export async function autoReleaseUnknownReceipts(now = Date.now()) {
   const rows = await sql<{ id: number }[]>`
     SELECT r.id FROM receipts r
     WHERE r.status = 'unknown' AND r.updated_at < ${new Date(now - AUTO_RELEASE_AFTER_MS)}
+      AND r.service <> 'codex-cli'
       AND NOT EXISTS (SELECT 1 FROM receipt_attempts a WHERE a.receipt_id = r.id AND a.error LIKE ${AUTO_RELEASE_NOTE + "%"})
     ORDER BY r.id LIMIT 200`;
   let released = 0;
