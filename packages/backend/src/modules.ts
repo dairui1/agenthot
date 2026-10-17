@@ -6,6 +6,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WorkOptions } from "pg-boss";
 import type { z } from "zod";
 import type { Brand, ItemProvenance } from "@aihot/contracts/site";
+import type { ItemReading } from "@aihot/contracts/reading";
+import type { AnalyzeInputArticle } from "./editorial/input.ts";
 import type { Db } from "./db.ts";
 import type { QueueOptions } from "./jobs/queue.ts";
 import type { Finding } from "./notify/feishu.ts";
@@ -199,6 +201,15 @@ export interface ServerModule {
   name: string;
   /** Validated source evidence, read only after the publication detail visibility gate. */
   itemProvenance?: (articleId: string, db: Db) => Promise<ItemProvenance | null>;
+  /** Optional original interpretation, after the same public visibility gate as the detail. */
+  itemReading?: (articleId: string, db: Db) => Promise<ItemReading | null>;
+  /** Extend the existing understanding call, never a second model call. Invalid optional copy is omitted. */
+  understandExtension?: (input: AnalyzeInputArticle, visibleMaterial: string) => {
+    version: string;
+    system: string;
+    schema: z.ZodType;
+    normalize: (value: unknown) => unknown | null;
+  } | null;
   /** Source retractions restrict every projection without rewriting an editor's independent overrides. */
   publicationRestriction?: (articleId: string, db: Db) => Promise<"withdrawn" | null>;
   /** After publication projection, in its transaction and after release locks (publication/publish.ts). */

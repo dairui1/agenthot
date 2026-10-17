@@ -1,5 +1,6 @@
 // Item detail and Markdown export, both behind the same visibility and licence rules.
 import type { ItemProvenance, OutlineEntry, SiteItemDetail, StoryRef } from "@aihot/contracts/site";
+import { READING_TITLES, type ItemReading } from "@aihot/contracts/reading";
 import { ITEM_COPY, SITE } from "@aihot/site";
 import { bodyToMarkdown } from "../content/markdown.ts";
 import { sql } from "../db.ts";
@@ -21,12 +22,40 @@ async function sourceProvenance(id: string): Promise<ItemProvenance | null> {
   return null;
 }
 
+async function sourceReading(id: string): Promise<ItemReading | null> {
+  for (const module of serverModules()) {
+    const reading = await module.itemReading?.(id, sql);
+    if (reading) return {
+      version: reading.version,
+      generatedAt: reading.generatedAt,
+      sections: reading.sections.map(({ key, items }) => ({
+        key, items: items.map(({ text, sourceUrl }) => ({ text, sourceUrl })),
+      })),
+      links: reading.links.map(({ label, url }) => ({ label, url })),
+    };
+  }
+  return null;
+}
+
+function readingOutline(reading: ItemReading | null): OutlineEntry[] {
+  if (!reading) return [];
+  return [
+    ...reading.sections.map(section => ({ id: `reading-${section.key}`, text: READING_TITLES[section.key], level: 2 })),
+    ...(reading.links.length ? [{ id: "reading-links", text: "使用入口", level: 2 }] : []),
+  ];
+}
+
 function markdownLabel(value: string): string {
   return value.replace(/[\\\[\]`<>]/g, " ").replace(/[\r\n]+/g, " ").trim();
 }
 
 function markdownUrl(value: string): string {
   return new URL(value).href.replace(/[<>]/g, (char) => encodeURIComponent(char));
+}
+
+function markdownReadingText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/[\\`*_\[\]{}()!#|~]/g, "\\$&").replace(/[\r\n]+/g, " ");
 }
 
 interface DetailRow extends ItemRow {
@@ -165,15 +194,17 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
 
   // The reason goes with the seat; a report yielding it points to the one holding it.
   const sameEvent = (await seatHolders([row], now)).get(row.id) ?? null;
+  const brief = row.visibility === "public" ? await sourceReading(id) : null;
   const item: SiteItemDetail = {
     ...summary,
     x,
     provenance: await sourceProvenance(id),
+    ...(brief ? { reading: brief } : {}),
     ...(sameEvent ? { reason: null, sameEvent } : {}),
     readingMode: "full",
     author: row.author,
     body: reading.body,
-    outline: reading.outline,
+    outline: [...readingOutline(brief), ...reading.outline],
     relatedStories: related,
     topics: topicLinks(row.topics),
     indexable: row.indexable,
@@ -208,6 +239,20 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   lines.push(`- ${SITE.name}：${itemUrl(row.id)}`);
   lines.push(`- 原文：${row.url}`, "");
   if (row.summary) lines.push("## 摘要", "", row.summary, "");
+  const reading = await sourceReading(id);
+  if (reading) {
+    lines.push(`- 解读更新：${reading.generatedAt}`, `- 依据${publicSourceName(row.source_name)}材料整理，非本站独立复现。`, "");
+    for (const section of reading.sections) {
+      lines.push(`## ${READING_TITLES[section.key]}${section.key === "value" ? " · 编辑解读" : ""}`, "");
+      for (const item of section.items) lines.push(`- ${markdownReadingText(item.text)} [来源依据](<${markdownUrl(item.sourceUrl)}>)`);
+      lines.push("");
+    }
+    if (reading.links.length) {
+      lines.push("## 使用入口", "");
+      for (const link of reading.links) lines.push(`- [${markdownLabel(link.label)}](<${markdownUrl(link.url)}>)`);
+      lines.push("");
+    }
+  }
   const provenance = await sourceProvenance(id);
   if (provenance) {
     lines.push("## 分析与证据", "", `- 分析来源：[${markdownLabel(provenance.name)}](<${markdownUrl(provenance.url)}>)`,

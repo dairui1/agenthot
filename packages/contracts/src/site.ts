@@ -1,6 +1,7 @@
 // First-party site API (/api/site/*). Not a public API: it may evolve with the website,
 // but it is served from the same public read layer as v1, RSS and MCP.
 import type { CategoryKey, ChannelKey } from "./taxonomy.ts";
+import type { ItemReading } from "./reading.ts";
 
 export interface SourceRef {
   /** The name readers see (publication/rules.ts publicSourceName), as is every source name here. */
@@ -143,6 +144,8 @@ export interface ItemProvenance {
  */
 export interface SiteItemDetail extends ItemSummary {
   provenance?: ItemProvenance | null;
+  /** Original source-grounded interpretation, separate from licensed source full text. */
+  reading?: ItemReading | null;
   /** The post with all its media; its text is the body. */
   x: Omit<XPostView, "text" | "translation"> | null;
   /** Selected, but its fact's seat is held by this report: marked 同新闻, without a reason of its own. */

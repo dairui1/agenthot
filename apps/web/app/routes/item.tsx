@@ -20,6 +20,7 @@ import { MediaGallery } from "../features/item/MediaGallery";
 import { QuotedPost } from "../features/item/QuotedPost";
 import { ArticleBody } from "../features/item/ArticleBody";
 import { SourceEvidence } from "../features/item/SourceEvidence";
+import { ReadingBrief } from "../features/item/ReadingBrief";
 import { ActionsSheet, ReaderToolbar, type ActionRow } from "../features/item/ReaderTools";
 import { OutlineSheet, scrollToAnchor } from "../components/ui/OutlineSheet";
 import { takePreview } from "../features/item/preview";
@@ -421,7 +422,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
 
   return (
     <div className="mx-auto max-w-[var(--page-max-reading)] pb-8">
-      {item.body && <ReadingProgress />}
+      {(item.body || item.reading && !summaryOnly) && <ReadingProgress />}
 
       {/* Phones: back to where the reader came from, the title once it has scrolled away, more actions. */}
       <PhoneBar
@@ -483,8 +484,6 @@ function ItemView({ item }: { item: SiteItemDetail }) {
             </section>
           )}
 
-          {item.provenance && !summaryOnly && <SourceEvidence provenance={item.provenance} />}
-
           {item.reason && !summaryOnly && (
             <section className="mt-6 border-t border-line pt-4 lg:hidden">
               <div className="mb-1 text-[12px] font-semibold text-ink-3">{ITEM_COPY.reasonLabel}</div>
@@ -509,6 +508,10 @@ function ItemView({ item }: { item: SiteItemDetail }) {
           )}
 
           {summaryOnly && <p className="mt-7 rounded-control bg-bg-sunk px-4 py-3 text-[13.5px] leading-relaxed text-ink-3">应来源方要求，这里只提供摘要与原文入口。完整内容请阅读原文。</p>}
+
+          {item.reading && !summaryOnly && <ReadingBrief reading={item.reading} sourceName={item.source.name} />}
+
+          {item.provenance && !summaryOnly && <SourceEvidence provenance={item.provenance} />}
 
           {item.body && bodyHtml && (
             <section className="mt-9 border-t border-line pt-4 xl:mt-10">

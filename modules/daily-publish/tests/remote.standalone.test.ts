@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { remoteEnvironment } from "../remote-config.ts";
+import { remoteEnvironment } from "@aihot/site/modules/operator-remote";
 
 const expectedRelease = "a".repeat(40);
 const env = {

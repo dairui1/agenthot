@@ -262,7 +262,8 @@ class RemoteLeaseTests(unittest.TestCase):
             daily.stop_process(child)
             for stream in [child.stdin, child.stdout, child.stderr]:
                 if stream is not None:
-                    stream.close()
+                    with contextlib.suppress(OSError):
+                        stream.close()
         pidfile = self.root / "container-pid"
         if pidfile.exists():
             with contextlib.suppress(ProcessLookupError):

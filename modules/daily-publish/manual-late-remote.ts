@@ -1,5 +1,5 @@
 // The existing one-shot SSH/container boundary supplies this envelope over stdin.
-import { remoteEnvironment } from "./remote-config.ts";
+import { remoteEnvironment } from "@aihot/site/modules/operator-remote";
 
 let close: (() => Promise<void>) | undefined;
 let stop: (() => Promise<void>) | undefined;

@@ -1,4 +1,4 @@
-import { remoteEnvironment } from "./remote-config.ts";
+import { remoteEnvironment } from "@aihot/site/modules/operator-remote";
 
 let input = "";
 for await (const chunk of process.stdin) {

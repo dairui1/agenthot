@@ -162,16 +162,24 @@ def wait_for_adapter(process, token, port, deadline):
             time.sleep(0.1)
 
 
-def remote_command(mode, release, seconds):
+def needs_adapter(mode, entrypoint="daily"):
+    modes = {"daily": {"check": False, "collect": True, "publish": False, "probe": True},
+             "reading": {"check": False, "run": True}}
+    if entrypoint not in modes or mode not in modes[entrypoint]:
+        raise TransportError("Unsupported transport entrypoint or mode")
+    return modes[entrypoint][mode]
+
+
+def remote_command(mode, release, seconds, *, entrypoint="daily"):
     # Docker writes the cidfile only after this invocation creates its container.
     # Never remove an existing container by its shared daily-publish name.
     tunnel_check = f"""test "$(timeout --signal=KILL 10s ss -H -ltn '( sport = :{REMOTE_PORT} )' | awk '{{print $4}}')" = '127.0.0.1:{REMOTE_PORT}' || {{ echo 'Reverse tunnel is not loopback-only' >&2; exit 1; }}
-""" if mode in {"collect", "probe"} else ""
+""" if needs_adapter(mode, entrypoint) else ""
     database_check = "" if mode == "probe" else """db_ip=$(timeout --signal=KILL 10s docker inspect --format '{{with index .NetworkSettings.Networks "agenthot_default"}}{{.IPAddress}}{{end}}' agenthot-db-1)
 test -n "$db_ip" || { echo 'Production database network address is unavailable' >&2; exit 1; }
 """
     environment = "" if mode == "probe" else '--env-file /opt/agenthot/.env -v agenthot_data:/data -e AGENTHOT_DATABASE_HOST="$db_ip"'
-    entrypoint = "node --input-type=module -e " + shlex.quote(PROBE_SCRIPT) if mode == "probe" else f"node modules/daily-publish/remote.ts --{mode}"
+    program = "node --input-type=module -e " + shlex.quote(PROBE_SCRIPT) if mode == "probe" else f"node modules/{'reading' if entrypoint == 'reading' else 'daily-publish'}/remote.ts --{mode}"
     return f"""set -eu
 deadline={int(time.time() + seconds)}
 exec 3<&0
@@ -228,7 +236,7 @@ printf '%s\\n' "$payload" | timeout --signal=TERM --kill-after=10s "${{container
   --read-only --tmpfs /tmp \\
   --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 768m \\
   {environment} \\
-  agenthot-app {entrypoint} 3<&- &
+  agenthot-app {program} 3<&- &
 runner=$!
 unset payload
 while kill -0 "$runner" >/dev/null 2>&1; do
@@ -243,11 +251,11 @@ exit "$status"
 """
 
 
-def run_remote(mode, release, payload, deadline, adapter=None, port=None):
+def run_remote(mode, release, payload, deadline, adapter=None, port=None, *, entrypoint="daily"):
     # Forwarding and execution share one SSH lifetime. A server-side stdin lease also stops the
     # owned container if the client is killed or the network stops delivering channel traffic.
-    forwards = ["-o", "ExitOnForwardFailure=yes", "-R", f"127.0.0.1:{REMOTE_PORT}:127.0.0.1:{port}"] if mode in {"collect", "probe"} else None
-    command = "bash -c " + shlex.quote(remote_command(mode, release, remaining(deadline)))
+    forwards = ["-o", "ExitOnForwardFailure=yes", "-R", f"127.0.0.1:{REMOTE_PORT}:127.0.0.1:{port}"] if needs_adapter(mode, entrypoint) else None
+    command = "bash -c " + shlex.quote(remote_command(mode, release, remaining(deadline), entrypoint=entrypoint))
     process = subprocess.Popen(ssh_command(command, forwards), stdin=subprocess.PIPE, text=True, start_new_session=True)
     try:
         process.stdin.write(json.dumps(payload) + "\n")

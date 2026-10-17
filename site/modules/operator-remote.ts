@@ -6,14 +6,14 @@ const MODEL_ENVS = [
   "REPORT_MODEL", "TRANSLATE_MODEL",
 ];
 
-/** The token travels over SSH stdin, never in a command line or a server-side file. */
+/** Shared site transport policy. Tokens travel over SSH stdin, never a command line or server file. */
 export function remoteEnvironment(input: unknown, mode: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (!["--collect", "--publish", "--check"].includes(mode)) throw new Error("Expected --collect, --publish or --check");
   if (!input || typeof input !== "object") throw new Error("Invalid remote configuration");
   const config = input as Record<string, unknown>;
   if (typeof config.expectedRelease !== "string" || !/^[a-f0-9]{40}$/.test(config.expectedRelease)
     || env.AIHOT_RELEASE !== config.expectedRelease) throw new Error("Production release differs from the local checkout");
-  const host = env.AGENTHOT_DATABASE_HOST;
+  const host = env["AGENTHOT_DATABASE_HOST"];
   if (!host || isIP(host) !== 4 || !env.POSTGRES_PASSWORD) throw new Error("Missing production database configuration");
   if (env.SITE_URL !== "https://agenthot.dairui1.com") throw new Error("Unexpected production site");
   const result: NodeJS.ProcessEnv = {

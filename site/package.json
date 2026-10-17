@@ -3,12 +3,13 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "dependencies": { "@aihot/agentlab": "*" },
+  "dependencies": { "@aihot/agentlab": "*", "@aihot/reading": "*" },
   "exports": {
     ".": "./site.ts",
     "./models": "./models.ts",
     "./modules": "./modules/index.ts",
     "./modules/server": "./modules/server.ts",
+    "./modules/operator-remote": "./modules/operator-remote.ts",
     "./modules/web": "./modules/web.ts",
     "./pages/*": "./pages/*",
     "./brand/*": "./brand/*"

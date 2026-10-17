@@ -27,6 +27,8 @@ import {
 import { CATEGORY_GUIDE, CATEGORY_TAGS, ENTITIES, ENTITY_TAGS, ITEM_TYPES, normalizeTags, TOPIC_TAGS } from "./vocabulary.ts";
 import { promptText, promptVersion } from "./prompts.ts";
 import { originalPostCopy } from "../content/posts.ts";
+import { serverModules } from "../modules.ts";
+import { sha256, stableJson } from "../lib/ids.ts";
 
 export { buildMaterial, loadAnalyzeInput, type AnalyzeInputArticle };
 
@@ -204,6 +206,7 @@ export interface AnalysisRun {
     itemType?: string;
     authorRole?: string;
     identityGuard?: IdentityGuard;
+    modules?: Record<string, unknown>;
     receiptIds: number[];
     reused: boolean;
   } | null;
@@ -337,11 +340,19 @@ export async function runStructure(a: AnalyzeInputArticle, opts: StepOpts = {}):
 export async function runUnderstand(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<AnalysisRun["writing"]> {
   const model = await modelFor("understand");
   const text = understandUser(a);
+  const extensions = serverModules().flatMap(module => {
+    const extension = module.understandExtension?.(a, text);
+    return extension ? [{ name: module.name, ...extension }] : [];
+  });
+  const schema = extensions.length ? UnderstandSchema.extend({ modules: z.record(z.string(), z.unknown()).optional().catch(undefined) }) : UnderstandSchema;
+  const extensionSystem = extensions.map(e => `\nmodules.${e.name}:\n${e.system}`).join("\n");
+  const system = extensions.length ? `${UNDERSTAND_SYSTEM}\n此外必须增加顶层 modules 对象；原来的六字段不变。${extensionSystem}` : UNDERSTAND_SYSTEM;
+  const version = extensions.length ? `${PROMPT_VERSIONS.understand}+${sha256(stableJson(extensions.map(e => ({ name: e.name, version: e.version, system: e.system, schema: z.toJSONSchema(e.schema) }))))}` : PROMPT_VERSIONS.understand;
   const call = (image: ContentPart | null) => {
     checkAnalysisRunning();
     return chatJson({
-      model, purpose: "understand_article", subject: subjectOf(a), promptVersion: PROMPT_VERSIONS.understand, system: UNDERSTAND_SYSTEM,
-      user: image ? [{ type: "text", text }, image] : text, schema: UnderstandSchema, temperature: 0.2, maxTokens: 16_384,
+      model, purpose: "understand_article", subject: subjectOf(a), promptVersion: version, system,
+      user: image ? [{ type: "text", text }, image] : text, schema, temperature: 0.2, maxTokens: 16_384,
       timeoutMs: 180_000, attemptTag: tagged(opts.attemptTag, "understand"),
     });
   };
@@ -362,10 +373,18 @@ export async function runUnderstand(a: AnalyzeInputArticle, opts: StepOpts = {})
     }
   }
   const d = res.data;
+  const modules: Record<string, unknown> = {};
+  for (const extension of extensions) {
+    const input = extension.schema.safeParse((d as { modules?: Record<string, unknown> }).modules?.[extension.name]);
+    if (!input.success) continue;
+    const normalized = extension.normalize(input.data);
+    if (normalized !== null) modules[extension.name] = normalized;
+  }
   const copy = finalizeCopy(translateInputOf(a), { titleZh: d.titleZh, summaryZh: d.summaryZh });
   return {
     kind: "understand", model: res.model, titleZh: copy.titleZh, summaryZh: copy.summaryZh, reasonZh: d.editorialJudgment.trim() || null,
     itemType: d.itemType, authorRole: d.authorRole, identityGuard: copy.identityGuard, receiptIds: [res.receiptId], reused: res.reused,
+    ...(Object.keys(modules).length ? { modules } : {}),
   };
 }
 
@@ -501,6 +520,7 @@ export async function analyzeArticle(articleId: string, opts: StepOpts = {}): Pr
     ...(w ? { writer: w.kind, writerModel: w.model, itemType: w.itemType ?? null, authorRole: w.authorRole ?? null } : {}),
     ...(w?.identityGuard?.outcome === "fallback" ? { identityGuard: w.identityGuard } : {}),
     scope: out.scope, fact: out.fact,
+    ...(w?.modules ? { modules: w.modules } : {}),
   };
   const committed = await sql.begin(async (tx) => {
     const [current] = await tx<{ revision: number }[]>`SELECT revision FROM articles WHERE id = ${articleId} FOR UPDATE`;
