@@ -65,6 +65,22 @@ test("only actual allowlisted URLs become usage links, with no inferred project 
   assert.deepEqual(validateReading(input, source, userMaterial(source))?.draft.links, [{ label: "文档", url: DOCS }]);
 });
 
+test("a real 54-character source title fits a usage label without truncation", () => {
+  const source = material();
+  const label = "更新原文：Cloud Agent Canvases and Environment Improvements";
+  assert.equal(label.length, 54);
+  const stored = validateReading({ ...draft(), links: [{ label, url: URL }] }, source, userMaterial(source));
+  assert.deepEqual(stored?.draft.links, [{ label, url: URL }]);
+  assert.deepEqual(publicReading(stored, source, DATE)?.links, [{ label, url: URL }]);
+});
+
+test("usage labels retain a bounded maximum of 120 characters", () => {
+  const source = material();
+  const input = { ...draft(), links: [{ label: "L".repeat(120), url: URL }] };
+  assert.ok(validateReading(input, source, userMaterial(source)));
+  assert.equal(validateReading({ ...input, links: [{ label: "L".repeat(121), url: URL }] }, source, userMaterial(source)), null);
+});
+
 test("URL extraction is confined to literal safe addresses in stored source material", () => {
   const source = materialOf("Do not infer https://title.example/docs", URL,
     `Use ${DOCS} or ${DOCS}. A project named other/project is mentioned. Private: http://service.internal/path`);

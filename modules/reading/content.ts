@@ -9,7 +9,7 @@ export const KEYS = ["changes", "value", "limitations"] as const;
 const Point = z.object({ text: z.string().trim().min(8).max(180), quote: z.string().trim().min(16).max(700), sourceUrl: z.string().max(2000) }).strict();
 export const DraftSchema = z.object({
   changes: z.array(Point).max(4), value: z.array(Point).max(3), limitations: z.array(Point).max(3),
-  links: z.array(z.object({ label: z.string().trim().min(1).max(40), url: z.string().max(2000) }).strict()).max(6),
+  links: z.array(z.object({ label: z.string().trim().min(1).max(120), url: z.string().max(2000) }).strict()).max(6),
 }).strict();
 export type Material = { title: string; url: string; body: string; links: string[] };
 type Draft = z.infer<typeof DraftSchema>;

@@ -12,7 +12,9 @@ const { installModules } = await import("@aihot/backend/modules");
 const { analyzeArticle, runUnderstand, loadAnalyzeInput, SCORE_SYSTEM, STRUCTURE_SYSTEM } = await import("@aihot/backend/editorial/analyze");
 const { PREFILTER_SYSTEM, UNDERSTAND_SYSTEM } = await import("@aihot/backend/editorial/writing");
 const { reading } = await import("../server.ts");
-const { checkReading, writeReading, itemReading } = await import("../service.ts");
+const { checkReading, writeReading, itemReading, previewReadingRecovery, applyReadingRecovery } = await import("../service.ts");
+const { materialOf, userMaterial, PROMPT, VERSION } = await import("../content.ts");
+const { sha256 } = await import("@aihot/backend/lib/ids");
 
 const BODY = "The release adds resumable tasks and a persisted task journal. The journal records each tool result before moving to the next action. The preview supports Linux only and requires an existing account. Documentation: https://example.com/docs";
 let id = "", answer: Record<string, unknown>, calls: string[] = [], responseClock: Date | null = null, recordResponseClock = false;
@@ -42,11 +44,13 @@ async function snapshot() {
 }
 const bindingOf = ({ articleId, revision, analysisId, materialHash }: Awaited<ReturnType<typeof checkReading>>) => ({ articleId, revision, analysisId, materialHash });
 beforeEach(async () => {
+  process.env.MODEL_CALLS_ENABLED = "true";
+  process.env.AGENTLAB_SYNC_ENABLED = "false";
   installModules([reading]);
   calls = [];
   responseClock = null;
   recordResponseClock = false;
-  await sql`TRUNCATE sources,articles,receipts,reports,job_runs RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE sources,articles,receipts,reports,job_runs,audit_log RESTART IDENTITY CASCADE`;
   await sql`INSERT INTO sources(id,name,kind,tier,participation_mode,site_fulltext) VALUES('reading-test','Fixture','rss','T1','editorial',false)`;
   await sql`INSERT INTO budgets(service,per_minute,per_hour,per_day) VALUES('codex-cli',100,200,500)
     ON CONFLICT(service) DO UPDATE SET per_minute=100,per_hour=200,per_day=500`;
@@ -191,4 +195,153 @@ test("invalid optional extension does not discard a valid understanding or make 
   assert.equal(result?.kind, "understand");
   assert.equal(result?.modules, undefined);
   assert.equal(calls.length, 1);
+});
+
+async function failedReading() {
+  const checked = await checkReading(id), binding = bindingOf(checked);
+  const user = userMaterial(materialOf("Task release", "https://example.com/release", BODY));
+  const request = { promptVersion: `${VERSION}:${binding.analysisId}:${binding.materialHash}`, systemHash: sha256(PROMPT),
+    userHash: sha256(user), userChars: user.length, temperature: 0.2, maxTokens: 4500,
+    transportRequestKey: sha256("saved-reading-fixture"), transportBodyHash: "a".repeat(64) };
+  const draft = { ...answer, links: [{ label: "Cursor release documentation with complete entry title", url: "https://example.com/docs" }] };
+  const response = { model: "gpt-6.1-sol", choices: [{ message: { content: JSON.stringify(draft) }, finish_reason: "stop" }] };
+  const [receipt] = await sql`INSERT INTO receipts(logical_key,service,model,purpose,subject,status,attempts,request,response,received_at,error)
+    VALUES('saved-reading-fixture','codex-cli','gpt-6.1-sol','reading_article',${'article:' + id + '@1'},'failed',1,${sql.json(request)},${sql.json(response)},now(),'local label schema rejection') RETURNING id`;
+  await sql`INSERT INTO receipt_attempts(receipt_id,attempt,service,model,status,finished_at)
+    VALUES(${receipt!.id},1,'codex-cli','gpt-6.1-sol','received',now())`;
+  process.env.MODEL_CALLS_ENABLED = "false";
+  return { ...binding, receiptId: receipt!.id as number };
+}
+
+test("explicit recovery previews and atomically publishes a saved long-label response with zero model calls", async () => {
+  const request = await failedReading(), before = await snapshot();
+  const [original] = await sql`SELECT response,error,attempts FROM receipts WHERE id=${request.receiptId}`;
+  const attempts = await sql`SELECT * FROM receipt_attempts`;
+  const checked = await previewReadingRecovery(request);
+  assert.equal(checked.preview.links[0]!.label.length, 54);
+  assert.equal(checked.existing, false);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, 0);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM reading_entries`)[0]!.n, 0);
+  const result = await applyReadingRecovery(request, checked.planHash);
+  assert.equal(result.status, "recovered");
+  assert.deepEqual(await snapshot(), before);
+  const [receipt] = await sql`SELECT status,response,error,attempts FROM receipts WHERE id=${request.receiptId}`;
+  assert.equal(receipt!.status, "completed");
+  assert.deepEqual({ response: receipt!.response, error: receipt!.error, attempts: receipt!.attempts }, { ...original });
+  assert.deepEqual(await sql`SELECT * FROM receipt_attempts`, attempts);
+  assert.equal((await itemReading(id, sql))?.links[0]!.label, checked.preview.links[0]!.label);
+  const [audit] = await sql`SELECT after FROM audit_log WHERE action='reading.response-recovered'`;
+  assert.equal(audit!.after.planHash, checked.planHash);
+  assert.equal(audit!.after.generatedAt, result.generatedAt);
+  assert.equal(JSON.stringify(audit).includes("The journal records"), false);
+  assert.equal((await applyReadingRecovery(request, checked.planHash)).status, "reused");
+  assert.equal((await previewReadingRecovery(request)).planHash, checked.planHash);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, 1);
+  assert.equal(calls.length, 0);
+});
+
+for (const status of ["unknown", "pending", "received", "completed"]) test(`recovery rejects ${status} instead of treating it as an approved local-format failure`, async () => {
+  const request = await failedReading();
+  await sql`UPDATE receipts SET status=${status} WHERE id=${request.receiptId}`;
+  await assert.rejects(previewReadingRecovery(request), /not a recoverable|no longer matches/);
+  await assert.rejects(applyReadingRecovery(request, "a".repeat(64)), /not a recoverable|no longer matches/);
+  assert.equal(calls.length, 0);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM reading_entries`)[0]!.n, 0);
+});
+
+for (const problem of ["missing-response", "truncated", "unknown-attempt", "extra-attempt", "prompt", "model"]) test(`recovery refuses unsafe saved evidence: ${problem}`, async () => {
+  const request = await failedReading();
+  if (problem === "missing-response") await sql`UPDATE receipts SET response=null WHERE id=${request.receiptId}`;
+  if (problem === "truncated") await sql`UPDATE receipts SET response=jsonb_set(response,'{choices,0,finish_reason}','"length"') WHERE id=${request.receiptId}`;
+  if (problem === "unknown-attempt") await sql`UPDATE receipt_attempts SET status='unknown' WHERE receipt_id=${request.receiptId}`;
+  if (problem === "extra-attempt") await sql`INSERT INTO receipt_attempts(receipt_id,attempt,service,model,status,finished_at)
+    VALUES(${request.receiptId},2,'codex-cli','gpt-6.1-sol','received',now())`;
+  if (problem === "prompt") await sql`UPDATE receipts SET request=jsonb_set(request,'{systemHash}',to_jsonb(${'b'.repeat(64)}::text)) WHERE id=${request.receiptId}`;
+  if (problem === "model") await sql`UPDATE receipts SET model='another-model' WHERE id=${request.receiptId}`;
+  await assert.rejects(previewReadingRecovery(request), /Reading refused/);
+  assert.equal(calls.length, 0);
+});
+
+test("recovery refuses changed material, analysis and approval evidence rather than rewriting a newer reading", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  await sql`UPDATE receipts SET response=response || '{"extra":"changed"}'::jsonb WHERE id=${request.receiptId}`;
+  await assert.rejects(applyReadingRecovery(request, checked.planHash), /approved recovery plan changed/);
+  const next = await previewReadingRecovery(request);
+  await sql`UPDATE articles SET body_text=body_text || ' New source detail.' WHERE id=${id}`;
+  await assert.rejects(applyReadingRecovery(request, next.planHash), /material or publication changed/);
+  await assert.rejects(previewReadingRecovery({ ...request, analysisId: request.analysisId + 1 }), /material or publication changed/);
+  assert.equal(calls.length, 0);
+});
+
+test("recovery exempts only its exact failed receipt and preserves every other unknown outcome", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  await sql`INSERT INTO receipts(logical_key,service,model,purpose,subject,status,attempts)
+    VALUES('other-unknown','codex-cli','gpt-6.1-sol','score_article',${'article:' + id + '@0'},'unknown',1)`;
+  const others = await sql`SELECT * FROM receipts WHERE id<>${request.receiptId}`;
+  await assert.rejects(applyReadingRecovery(request, checked.planHash), /unresolved or failed/);
+  assert.deepEqual(await sql`SELECT * FROM receipts WHERE id<>${request.receiptId}`, others);
+  assert.equal(calls.length, 0);
+});
+
+test("recovery requires every external valve closed even when a valid response is saved", async () => {
+  const request = await failedReading();
+  for (const key of ["MODEL_CALLS_ENABLED", "COLLECT_ENABLED", "AGENTLAB_SYNC_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"]) {
+    process.env[key] = "true";
+    await assert.rejects(previewReadingRecovery(request), /all recovery valves/);
+    await assert.rejects(applyReadingRecovery(request, "a".repeat(64)), /all recovery valves/);
+    process.env[key] = "false";
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("a failed recovery audit rolls back the entry and completion, retaining the original saved response", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  const before = await sql`SELECT * FROM receipts`;
+  await sql`ALTER TABLE audit_log ADD CONSTRAINT reading_test_audit_reject CHECK (false) NOT VALID`;
+  try { await assert.rejects(applyReadingRecovery(request, checked.planHash)); }
+  finally { await sql`ALTER TABLE audit_log DROP CONSTRAINT reading_test_audit_reject`; }
+  assert.deepEqual(await sql`SELECT * FROM receipts`, before);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM reading_entries`)[0]!.n, 0);
+  assert.equal((await applyReadingRecovery(request, checked.planHash)).status, "recovered");
+  assert.equal(calls.length, 0);
+});
+
+test("a replay refuses a changed stored interpretation rather than claiming the approved recovery is still current", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  await applyReadingRecovery(request, checked.planHash);
+  await sql`UPDATE reading_entries SET payload=jsonb_set(payload,'{draft,links,0,label}','"Changed label"') WHERE receipt_id=${request.receiptId}`;
+  await assert.rejects(applyReadingRecovery(request, checked.planHash), /no longer matches/);
+  assert.equal(calls.length, 0);
+});
+
+test("recovery refuses withdrawal after preview and leaves the failed receipt untouched", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  await sql`UPDATE publications SET visibility='withdrawn' WHERE article_id=${id}`;
+  await assert.rejects(applyReadingRecovery(request, checked.planHash), /material or publication changed/);
+  assert.equal((await sql`SELECT status FROM receipts WHERE id=${request.receiptId}`)[0]!.status, "failed");
+  assert.equal(calls.length, 0);
+});
+
+test("recovery preserves seven unrelated unknown receipts without creating any request or attempt", async () => {
+  const request = await failedReading();
+  for (let index = 0; index < 7; index++) await sql`INSERT INTO receipts(logical_key,service,model,purpose,subject,status,attempts)
+    VALUES(${'unrelated-' + index},'codex-cli','gpt-6.1-sol','prefilter_article',${'article:unrelated' + index + '@1'},'unknown',1)`;
+  const unknowns = await sql`SELECT * FROM receipts WHERE status='unknown'`;
+  const checked = await previewReadingRecovery(request);
+  await applyReadingRecovery(request, checked.planHash);
+  assert.deepEqual(await sql`SELECT * FROM receipts WHERE status='unknown'`, unknowns);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM receipts`)[0]!.n, 8);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM receipt_attempts`)[0]!.n, 1);
+  assert.equal(calls.length, 0);
+});
+
+test("concurrent recovery commits at most one entry and audit, with conflicts requiring explicit recheck", async () => {
+  const request = await failedReading(), checked = await previewReadingRecovery(request);
+  const results = await Promise.allSettled([applyReadingRecovery(request, checked.planHash), applyReadingRecovery(request, checked.planHash)]);
+  assert.equal(results.filter(r => r.status === "fulfilled" && r.value.status === "recovered").length, 1);
+  for (const result of results) if (result.status === "rejected") assert.match(result.reason.message, /could not serialize/);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM reading_entries`)[0]!.n, 1);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, 1);
+  assert.equal((await applyReadingRecovery(request, checked.planHash)).status, "reused");
+  assert.equal(calls.length, 0);
 });

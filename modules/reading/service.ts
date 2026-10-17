@@ -4,6 +4,7 @@ import { chatJson, MODELS } from "@aihot/backend/providers/llm";
 import { completeReceipt } from "@aihot/backend/providers/receipts";
 import { invalidateModelCache, modelFor } from "@aihot/backend/editorial/models";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
+import { audit } from "@aihot/backend/audit";
 import { DraftSchema, materialHash, materialOf, PROMPT, publicReading, userMaterial, validateReading, VERSION } from "./content.ts";
 
 export const ReadingBinding = z.object({ articleId: z.string().regex(/^[a-z0-9]{20,32}$/), revision: z.number().int().positive(),
@@ -30,10 +31,10 @@ async function state(articleId: string, db: Db, lock = false) {
   return { row, material, binding, existing };
 }
 
-async function guard(articleId: string, db: Db) {
+async function guard(articleId: string, db: Db, recoveredReceiptId: number | null = null) {
   // The whole article, not only this purpose/revision: changing prompts must not resend an unknown request.
   const bad = await db`SELECT r.id FROM receipts r LEFT JOIN articles a ON a.id=${articleId}
-    WHERE r.status IN ('pending','unknown','failed') AND (r.id=a.grouping_receipt_id
+    WHERE r.status IN ('pending','unknown','failed') AND (${recoveredReceiptId}::bigint IS NULL OR r.id<>${recoveredReceiptId}) AND (r.id=a.grouping_receipt_id
       OR substring(r.subject from '^article:([^@:#]+)')=${articleId}) LIMIT 1`;
   if (bad.length) refuse("article has unresolved or failed requests");
   const active = await db`SELECT id FROM job_runs WHERE status='running'
@@ -116,5 +117,95 @@ export async function writeReading(value: unknown, approvedPlanHash: string) {
       VALUES (${binding.articleId},${binding.revision},${binding.analysisId},${binding.materialHash},${VERSION},${response.receiptId},${tx.json(payload as never)}) RETURNING created_at`;
     await completeReceipt(tx as Tx, response.receiptId);
     return { status: "written", ...binding, receiptId: response.receiptId, generatedAt: saved!.created_at.toISOString() };
+  });
+}
+
+export const ReadingRecoveryRequest = ReadingBinding.extend({ receiptId: z.number().int().positive() }).strict();
+type RecoveryRequest = z.infer<typeof ReadingRecoveryRequest>;
+const RECOVERY_ACTION = "reading.response-recovered";
+const hash = (value: unknown) => sha256(stableJson(value));
+
+function recoveryValves() {
+  for (const key of ["MODEL_CALLS_ENABLED", "COLLECT_ENABLED", "AGENTLAB_SYNC_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"]) {
+    if (process.env[key] !== "false") refuse("all recovery valves must be closed");
+  }
+}
+
+async function recoveryPlan(request: RecoveryRequest, db: Db, lock = false) {
+  const { receiptId, ...binding } = request;
+  const current = await state(binding.articleId, db, lock);
+  if (!current || stableJson(current.binding) !== stableJson(binding)) return refuse("recovery material or publication changed");
+  const [receipt] = await db`SELECT id,logical_key,service,model,purpose,subject,status,attempts,request,response,received_at
+    FROM receipts WHERE id=${receiptId} ${lock ? db`FOR UPDATE` : db``}`;
+  if (!receipt || !["failed", "completed"].includes(receipt.status) || !receipt.response || !receipt.received_at
+    || receipt.purpose !== "reading_article" || receipt.subject !== `article:${binding.articleId}@${binding.revision}`
+    || receipt.service !== "codex-cli" || receipt.model !== "gpt-6.1-sol" || receipt.attempts !== 1) refuse("receipt is not a recoverable saved reading response");
+  const spec = MODELS["gpt-6.1-sol"], summary = receipt.request;
+  const user = userMaterial(current.material);
+  if (spec?.service !== "codex-cli" || spec.model !== receipt.model
+    || summary?.promptVersion !== `${VERSION}:${binding.analysisId}:${binding.materialHash}`
+    || summary.systemHash !== sha256(PROMPT) || summary.userHash !== sha256(user) || summary.userChars !== user.length
+    || summary.temperature !== 0.2 || summary.maxTokens !== 4500
+    || summary.transportRequestKey !== sha256(receipt.logical_key) || !/^[a-f0-9]{64}$/.test(summary.transportBodyHash ?? "")) refuse("saved reading request does not match the current prompt and material");
+  const attempts = await db`SELECT attempt,service,model,status,request_id,started_at,finished_at FROM receipt_attempts
+    WHERE receipt_id=${receiptId} ORDER BY attempt ${lock ? db`FOR SHARE` : db``}`;
+  if (attempts.length !== 1 || attempts[0]!.attempt !== 1 || attempts[0]!.status !== "received"
+    || attempts[0]!.service !== receipt.service || attempts[0]!.model !== receipt.model || !attempts[0]!.finished_at) refuse("saved response has no confirmed received attempt");
+  const response = receipt.response;
+  if (response.model !== receipt.model || !Array.isArray(response.choices) || response.choices.length !== 1
+    || response.choices[0]?.finish_reason !== "stop" || typeof response.choices[0]?.message?.content !== "string") refuse("saved reading response is incomplete");
+  let draft: unknown;
+  try { draft = JSON.parse(response.choices[0].message.content.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/, "$1")); }
+  catch { return refuse("saved reading response is not valid JSON"); }
+  const payload = validateReading(draft, current.material, user);
+  if (!payload) return refuse("saved reading response has no valid grounded interpretation");
+  // Only this positively identified saved response is exempted. Other unresolved outcomes stay blocked.
+  await guard(binding.articleId, db, receiptId);
+  const evidence = { request, publicationHash: current.row.publication_hash, version: VERSION,
+    requestHash: hash(summary), responseHash: hash(response), payloadHash: hash(payload), attemptsHash: hash(attempts),
+    receivedAt: receipt.received_at.toISOString() };
+  const planHash = hash(evidence);
+  const [previous] = await db`SELECT after FROM audit_log WHERE action=${RECOVERY_ACTION}
+    AND subject=${'article:' + binding.articleId} AND request_id=${'reading-recovery:' + receiptId} ORDER BY id DESC LIMIT 1`;
+  if (receipt.status === "completed") {
+    if (!current.existing || current.existing.receiptId !== receiptId || hash(current.existing.payload) !== evidence.payloadHash
+      || !publicReading(current.existing.payload, current.material, current.existing.at) || previous?.after?.planHash !== planHash
+      || previous.after.generatedAt !== current.existing.at.toISOString()) refuse("completed recovery no longer matches its audited reading");
+  } else if (current.existing || previous) refuse("recovery would replace an existing interpretation or audit");
+  return { ...current, receipt, payload, evidence, planHash };
+}
+
+/** Explicit incident recovery only: preview the persisted response, never contact a provider. */
+export async function previewReadingRecovery(value: unknown) {
+  const request = ReadingRecoveryRequest.parse(value);
+  recoveryValves();
+  return sql.begin("isolation level repeatable read read only", async tx => {
+    const current = await recoveryPlan(request, tx);
+    return { request, planHash: current.planHash, responseHash: current.evidence.responseHash, existing: !!current.existing,
+      preview: { sections: publicReading(current.payload, current.material, current.receipt.received_at)!.sections,
+        links: current.payload.draft.links.map(({ label, url }) => ({ label, url })) } };
+  });
+}
+
+/** The reading, completion and operator audit commit together; attempts and original errors are retained. */
+export async function applyReadingRecovery(value: unknown, approvedPlanHash: string) {
+  const request = ReadingRecoveryRequest.parse(value);
+  if (!/^[a-f0-9]{64}$/.test(approvedPlanHash)) refuse("invalid recovery plan identity");
+  recoveryValves();
+  return sql.begin("isolation level serializable", async tx => {
+    await tx`SET LOCAL lock_timeout='5s'`;
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${'reading:' + request.articleId}))`;
+    const current = await recoveryPlan(request, tx, true);
+    if (current.planHash !== approvedPlanHash) refuse("approved recovery plan changed");
+    if (current.existing) return { status: "reused", ...request, generatedAt: current.existing.at.toISOString() };
+    const [saved] = await tx`INSERT INTO reading_entries (article_id,revision,analysis_id,material_hash,version,receipt_id,payload)
+      VALUES (${request.articleId},${request.revision},${request.analysisId},${request.materialHash},${VERSION},${request.receiptId},${tx.json(current.payload as never)}) RETURNING created_at`;
+    const generatedAt = saved!.created_at.toISOString();
+    await completeReceipt(tx as Tx, request.receiptId);
+    await audit("operator", RECOVERY_ACTION, `article:${request.articleId}`,
+      "Recover a saved reading response after link-label format validation repair; no provider request sent.",
+      { receiptStatus: "failed" }, { ...current.evidence, planHash: current.planHash, generatedAt },
+      { requestId: `reading-recovery:${request.receiptId}`, db: tx });
+    return { status: "recovered", ...request, generatedAt };
   });
 }

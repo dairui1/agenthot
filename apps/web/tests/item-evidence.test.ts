@@ -25,7 +25,10 @@ const detail: SiteItemDetail = {
       { key: "value", items: [{ text: "对需要上传大文件的工作流，可以将配置限定在对应会话，而不是统一放宽所有会话。", sourceUrl: "https://example.com/release" }] },
       { key: "limitations", items: [{ text: "来源仅提供配置接口说明，没有提供大文件传输的独立性能测试。", sourceUrl: "https://example.com/release" }] },
     ],
-    links: [{ label: "官方配置文档", url: "https://example.com/docs/session-request-limits" }],
+    links: [
+      { label: "官方配置文档", url: "https://example.com/docs/session-request-limits" },
+      { label: "official-configuration-reference-".repeat(3), url: "https://example.com/docs/long-entry" },
+    ],
   },
 };
 let browser: Browser;
@@ -64,6 +67,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000
         await expect(reading.getByRole("heading", { name: heading, exact: true })).toBeVisible();
       }
       await expect(reading.getByRole("link", { name: "官方配置文档" })).toHaveAttribute("href", detail.reading!.links[0]!.url);
+      await expect(reading.getByRole("link", { name: detail.reading!.links[1]!.label, exact: true })).toHaveAttribute("href", detail.reading!.links[1]!.url);
       await expect(reading.getByRole("link", { name: "核对第 1 条具体变化的来源依据" })).toHaveAttribute("rel", "noopener noreferrer");
       await expect(reading.getByText("编辑解读", { exact: true })).toBeVisible();
       await expect(reading.locator("time")).toHaveAttribute("datetime", detail.reading!.generatedAt);
